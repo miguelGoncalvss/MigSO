@@ -6,5 +6,5 @@ SECTIONS
     .data : { *(.data*) }
     .rdata : { *(.rdata*) }
     .bss : { *(.bss*) }
-    /DISCARD/ : { *(.pdata*) *(.xdata*) *(.eh_frame*) *(.comment) }
+    /DISCARD/ : { *(.reloc*) *(.pdata*) *(.xdata*) *(.eh_frame*) *(.comment) }
 }
