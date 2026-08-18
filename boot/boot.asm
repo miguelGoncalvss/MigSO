@@ -7,7 +7,8 @@ ORG 0x7C00
 
 KERNEL_LOAD_SEGMENT equ 0x1000
 KERNEL_LOAD_OFFSET  equ 0x0000
-SECTORS_TO_LOAD     equ 15
+SECTORS_TO_LOAD     equ 64
+
 
 start:
     cli

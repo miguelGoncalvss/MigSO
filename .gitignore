@@ -1,0 +1,16 @@
+# Build outputs and binaries
+*.o
+*.bin
+*.elf
+*.tmp
+*.img
+*.iso
+build/
+bin/
+
+# Temporary and editor files
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
