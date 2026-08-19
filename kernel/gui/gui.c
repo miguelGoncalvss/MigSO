@@ -8,7 +8,9 @@
 #include <kernel/kheap.h>
 #include <kernel/pmm.h>
 #include <fs/migfs.h>
+#include <interpreter/txt_interp.h>
 #include <games/snake.h>
+#include <emulator/gameboy.h>
 #include <libc/stdio.h>
 #include <libc/stdlib.h>
 #include "font8x8.h"
@@ -16,7 +18,6 @@
 static uint32_t* backbuffer = NULL;
 
 // Sprite 12x18 do cursor classico System 7
-// 0 = Transparente, 1 = Borda Preta, 2 = Preenchimento Branco
 static const uint8_t cursor_sprite[18][12] = {
     {1,0,0,0,0,0,0,0,0,0,0,0},
     {1,1,0,0,0,0,0,0,0,0,0,0},
@@ -39,7 +40,6 @@ static const uint8_t cursor_sprite[18][12] = {
 };
 
 // Icone Hard Drive 24x18
-// 0 = Transp, 1 = Preto, 2 = Branco, 3 = Cinza Medio, 4 = Cinza Escuro
 static const uint8_t icon_hd_24x18[18][24] = {
     {0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0},
     {0,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0},
@@ -57,6 +57,28 @@ static const uint8_t icon_hd_24x18[18][24] = {
     {0,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,1,0},
     {0,0,1,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,1,0,0},
     {0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+};
+
+// Icone TextEdit / Documento 24x18
+static const uint8_t icon_edit_24x18[18][24] = {
+    {0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0},
+    {0,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,0,0,0,0,0},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,1,0,0,0,0},
+    {1,2,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,1,1,1,1,1,1,1,1,1,1,1,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,1,1,1,1,1,1,1,1,2,2,2,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0,0,0,0},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0,0,0,0},
+    {0,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,1,0,0,0,0},
+    {0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0},
     {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
 };
@@ -82,6 +104,29 @@ static const uint8_t icon_snake_24x18[18][24] = {
     {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
 };
+
+// Icone Pokemon / Pokeball 24x18 (Estilo Mac OS System 7 Classic)
+static const uint8_t icon_pokemon_24x18[18][24] = {
+    {0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0},
+    {0,0,0,0,0,1,1,4,4,4,4,4,4,4,4,4,4,1,1,0,0,0,0,0},
+    {0,0,0,0,1,4,4,4,4,4,4,4,4,4,4,4,4,4,4,1,0,0,0,0},
+    {0,0,0,1,4,4,2,2,4,4,4,4,4,4,4,4,4,4,4,4,1,0,0,0},
+    {0,0,1,4,4,2,2,2,4,4,4,4,4,4,4,4,4,4,4,4,4,1,0,0},
+    {0,1,4,4,4,4,2,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,1,0},
+    {0,1,4,4,4,4,4,4,4,4,1,1,1,1,4,4,4,4,4,4,4,4,1,0},
+    {1,1,1,1,1,1,1,1,1,1,1,2,2,1,1,1,1,1,1,1,1,1,1,1},
+    {1,4,4,4,4,4,4,4,1,2,2,1,1,2,2,1,4,4,4,4,4,4,4,1},
+    {1,2,2,2,2,2,2,2,1,2,2,1,1,2,2,1,2,2,2,2,2,2,2,1},
+    {1,1,1,1,1,1,1,1,1,1,1,2,2,1,1,1,1,1,1,1,1,1,1,1},
+    {0,1,2,2,2,2,2,2,2,2,1,1,1,1,2,2,2,2,2,2,2,2,1,0},
+    {0,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0},
+    {0,0,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0,0},
+    {0,0,0,1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0,0,0},
+    {0,0,0,0,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,1,0,0,0,0},
+    {0,0,0,0,0,1,1,3,3,3,3,3,3,3,3,3,3,1,1,0,0,0,0,0},
+    {0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0,0}
+};
+
 
 // Icone Terminal / CLI 24x18
 static const uint8_t icon_term_24x18[18][24] = {
@@ -131,6 +176,10 @@ static const uint8_t icon_trash_20x22[22][20] = {
     {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
 };
 
+// ============================================================
+// Primitivas Graficas
+// ============================================================
+
 void gui_draw_pixel(int x, int y, uint32_t color) {
     if (x >= 0 && x < GUI_WIDTH && y >= 0 && y < GUI_HEIGHT) {
         backbuffer[y * GUI_WIDTH + x] = color;
@@ -179,6 +228,37 @@ void gui_draw_rect(int x, int y, int w, int h, uint32_t color) {
     gui_draw_line_h(x, y + h - 1, w, color);
     gui_draw_line_v(x, y, h, color);
     gui_draw_line_v(x + w - 1, y, h, color);
+}
+
+void gui_draw_inset_frame(int x, int y, int w, int h) {
+    if (w <= 0 || h <= 0) return;
+    gui_draw_rect_fill(x, y, w, h, GUI_COLOR_WHITE);
+    gui_draw_line_h(x, y, w, GUI_COLOR_DARK_GRAY);
+    gui_draw_line_v(x, y, h, GUI_COLOR_DARK_GRAY);
+    gui_draw_line_h(x, y + h - 1, w, GUI_COLOR_MID_GRAY);
+    gui_draw_line_v(x + w - 1, y, h, GUI_COLOR_MID_GRAY);
+}
+
+void gui_draw_button(int x, int y, int w, int h, const char* text, int is_pressed) {
+    if (w <= 0 || h <= 0) return;
+    if (is_pressed) {
+        gui_draw_rect_fill(x, y, w, h, GUI_COLOR_BLACK);
+        int tlen = (int)strlen(text) * 8;
+        int tx = x + (w - tlen) / 2;
+        int ty = y + (h - 14) / 2;
+        gui_draw_string(tx, ty, text, GUI_COLOR_WHITE);
+    } else {
+        gui_draw_rect_fill(x, y, w, h, GUI_COLOR_LIGHT_GRAY);
+        gui_draw_rect(x, y, w, h, GUI_COLOR_BLACK);
+        gui_draw_line_h(x + 1, y + 1, w - 2, GUI_COLOR_WHITE);
+        gui_draw_line_v(x + 1, y + 1, h - 2, GUI_COLOR_WHITE);
+        gui_draw_line_h(x + 1, y + h - 2, w - 2, GUI_COLOR_MID_GRAY);
+        gui_draw_line_v(x + w - 2, y + 1, h - 2, GUI_COLOR_MID_GRAY);
+        int tlen = (int)strlen(text) * 8;
+        int tx = x + (w - tlen) / 2;
+        int ty = y + (h - 14) / 2;
+        gui_draw_string(tx, ty, text, GUI_COLOR_BLACK);
+    }
 }
 
 void gui_draw_char(int x, int y, char c, uint32_t fg) {
@@ -302,13 +382,16 @@ static void draw_menu_bar(int active_menu) {
     } else if (active_menu == 2) { // Menu Special
         gui_draw_rect_fill(230, 0, 68, 20, GUI_COLOR_BLACK);
         gui_draw_string(235, 2, "Special", GUI_COLOR_WHITE);
+    } else if (active_menu == 3) { // Menu File
+        gui_draw_rect_fill(80, 0, 48, 20, GUI_COLOR_BLACK);
+        gui_draw_string(85, 2, "File", GUI_COLOR_WHITE);
     }
 }
 
 static void draw_dropdown_menu(int menu_id, int hover_item) {
     if (menu_id == 1) {
         // Menu "migOS"
-        int mx = 4, my = 21, mw = 160, mh = 80;
+        int mx = 4, my = 21, mw = 165, mh = 80;
         gui_draw_rect_fill(mx + 3, my + 3, mw, mh, GUI_COLOR_BLACK);
         gui_draw_rect_fill(mx, my, mw, mh, GUI_COLOR_WHITE);
         gui_draw_rect(mx, my, mw, mh, GUI_COLOR_BLACK);
@@ -316,7 +399,7 @@ static void draw_dropdown_menu(int menu_id, int hover_item) {
         const char* items[] = {
             "About migOS...",
             "System Profile",
-            "Hardware Info",
+            "Text Editor (GUI)",
             "Exit to Terminal"
         };
 
@@ -331,16 +414,40 @@ static void draw_dropdown_menu(int menu_id, int hover_item) {
         }
     } else if (menu_id == 2) {
         // Menu "Special"
-        int mx = 230, my = 21, mw = 170, mh = 80;
+        int mx = 230, my = 21, mw = 175, mh = 98;
         gui_draw_rect_fill(mx + 3, my + 3, mw, mh, GUI_COLOR_BLACK);
         gui_draw_rect_fill(mx, my, mw, mh, GUI_COLOR_WHITE);
         gui_draw_rect(mx, my, mw, mh, GUI_COLOR_BLACK);
 
         const char* items[] = {
+            "Text Editor",
+            "Game Boy (migBoy)",
             "Snake Game",
-            "Clean Up Desktop",
             "Restart migOS",
             "Shut Down (CLI)"
+        };
+
+        for (int i = 0; i < 5; i++) {
+            int iy = my + 4 + (i * 18);
+            if (hover_item == i) {
+                gui_draw_rect_fill(mx + 2, iy - 2, mw - 4, 18, GUI_COLOR_BLACK);
+                gui_draw_string(mx + 8, iy, items[i], GUI_COLOR_WHITE);
+            } else {
+                gui_draw_string(mx + 8, iy, items[i], GUI_COLOR_BLACK);
+            }
+        }
+    } else if (menu_id == 3) {
+        // Menu "File"
+        int mx = 80, my = 21, mw = 160, mh = 80;
+        gui_draw_rect_fill(mx + 3, my + 3, mw, mh, GUI_COLOR_BLACK);
+        gui_draw_rect_fill(mx, my, mw, mh, GUI_COLOR_WHITE);
+        gui_draw_rect(mx, my, mw, mh, GUI_COLOR_BLACK);
+
+        const char* items[] = {
+            "New Document",
+            "Open TextEdit",
+            "Save Active File",
+            "Close Window"
         };
 
         for (int i = 0; i < 4; i++) {
@@ -395,6 +502,220 @@ static void draw_mouse_cursor(int mx, int my) {
     }
 }
 
+// ============================================================
+// Buffer e Estado do Editor de Texto GUI (TextEdit)
+// ============================================================
+#define GUI_EDIT_MAX_CHARS 8192
+static char gui_edit_buf[GUI_EDIT_MAX_CHARS];
+static int gui_edit_len = 0;
+static int gui_cursor_pos = 0;
+static char gui_edit_filename[MIGFS_MAX_FILENAME] = "readme.txt";
+static int gui_edit_dirty = 0;
+static char gui_script_output[2048];
+
+static void gui_load_file_to_editor(const char* filename) {
+    strncpy(gui_edit_filename, filename, MIGFS_MAX_FILENAME - 1);
+    gui_edit_filename[MIGFS_MAX_FILENAME - 1] = '\0';
+
+    migfs_file_t* f = migfs_open(filename);
+    if (f && f->data) {
+        size_t to_copy = f->size;
+        if (to_copy >= GUI_EDIT_MAX_CHARS - 1) to_copy = GUI_EDIT_MAX_CHARS - 2;
+        memcpy(gui_edit_buf, f->data, to_copy);
+        gui_edit_buf[to_copy] = '\0';
+        gui_edit_len = (int)to_copy;
+    } else {
+        gui_edit_buf[0] = '\0';
+        gui_edit_len = 0;
+    }
+    gui_cursor_pos = 0;
+    gui_edit_dirty = 0;
+}
+
+static void gui_save_editor_file(void) {
+    migfs_write(gui_edit_filename, gui_edit_buf, (size_t)gui_edit_len);
+    gui_edit_dirty = 0;
+}
+
+// ============================================================
+// Gerenciador de Janelas (Z-Order & Renderizacao)
+// ============================================================
+#define WIN_ID_ABOUT      1
+#define WIN_ID_FILES      2
+#define WIN_ID_EDITOR     3
+#define WIN_ID_SCRIPT_OUT 4
+
+static int z_order[4] = { WIN_ID_ABOUT, WIN_ID_FILES, WIN_ID_EDITOR, WIN_ID_SCRIPT_OUT };
+
+static void bring_window_to_front(int win_id) {
+    int idx = -1;
+    for (int i = 0; i < 4; i++) {
+        if (z_order[i] == win_id) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx != -1 && idx < 3) {
+        for (int i = idx; i < 3; i++) {
+            z_order[i] = z_order[i + 1];
+        }
+        z_order[3] = win_id;
+    }
+}
+
+static void render_win_about(gui_window_t* win) {
+    if (!win->is_open) return;
+    gui_draw_window(win);
+
+    draw_icon_24x18(win->x + 14, win->y + 28, icon_hd_24x18);
+    gui_draw_string_win(win, 44, 30, "migOS System 7 Classic Desktop", GUI_COLOR_BLACK);
+    gui_draw_line_h(win->x + 12, win->y + 52, win->w - 24, GUI_COLOR_LIGHT_GRAY);
+
+    gui_draw_string_win(win, 14, 60, "Sistema Operacional: migOS Kernel v0.5", GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 82, "Arquitetura: x86 IA-32 / Modo Protegido (Ring 0)", GUI_COLOR_DARK_GRAY);
+
+    char mem_str[64];
+    sprintf(mem_str, "Memoria Fisica (PMM): %u MB (16,384 Frames 4KB)", (unsigned int)(pmm_get_total_memory() / (1024 * 1024)));
+    gui_draw_string_win(win, 14, 104, mem_str, GUI_COLOR_DARK_GRAY);
+
+    sprintf(mem_str, "Heap Dinamico: %u KB Livres de 8 MB", (unsigned int)(kheap_get_free_bytes() / 1024));
+    gui_draw_string_win(win, 14, 126, mem_str, GUI_COLOR_DARK_GRAY);
+
+    gui_draw_string_win(win, 14, 148, "Display: 640x480 @ 32-bit True Color (BGA LFB)", GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 170, "Disco: MIGFS Persistente em Disco ATA Primario", GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 192, "Mouse: PS/2 IntelliMouse com Roda de Rolagem", GUI_COLOR_DARK_GRAY);
+
+    gui_draw_line_h(win->x + 12, win->y + 220, win->w - 24, GUI_COLOR_LIGHT_GRAY);
+    gui_draw_string_win(win, 14, 234, "Arraste a janela ou feche no botao [X]", GUI_COLOR_ACCENT_BLUE);
+    gui_draw_string_win(win, 14, 256, "Pressione [ESC] para retornar ao Terminal CLI", GUI_COLOR_DARK_GRAY);
+}
+
+static void render_win_files(gui_window_t* win) {
+    if (!win->is_open) return;
+    gui_draw_window(win);
+
+    gui_draw_string_win(win, 12, 28, "Arquivos no Disco ATA Persistente (MIGFS):", GUI_COLOR_DARK_GRAY);
+    gui_draw_line_h(win->x + 12, win->y + 48, win->w - 24, GUI_COLOR_LIGHT_GRAY);
+
+    size_t fcount = migfs_get_file_count();
+    int file_rel_y = 56;
+    for (size_t i = 0; i < fcount && i < 10; i++) {
+        migfs_file_t* f = migfs_get_file_by_index(i);
+        if (f) {
+            draw_icon_24x18(win->x + 14, win->y + file_rel_y, icon_edit_24x18);
+            gui_draw_string_win(win, 44, file_rel_y + 2, f->name, GUI_COLOR_BLACK);
+
+            char sz_str[32];
+            sprintf(sz_str, "%u B", (unsigned int)f->size);
+            gui_draw_string_win(win, 220, file_rel_y + 2, sz_str, GUI_COLOR_DARK_GRAY);
+
+            const char* attr_str = (f->flags & MIGFS_FILE_READONLY) ? "[RO]" : "[RW]";
+            gui_draw_string_win(win, 320, file_rel_y + 2, attr_str, GUI_COLOR_DARK_GRAY);
+
+            file_rel_y += 24;
+        }
+    }
+}
+
+static void render_win_editor(gui_window_t* win) {
+    if (!win->is_open) return;
+
+    char ed_title[64];
+    sprintf(ed_title, "TextEdit - %s%s", gui_edit_filename, gui_edit_dirty ? " *" : "");
+    win->title = ed_title;
+    gui_draw_window(win);
+
+    // Botoes da Barra de Ferramentas
+    gui_draw_button(win->x + 12, win->y + 25, 48, 18, "Novo", 0);
+    gui_draw_button(win->x + 64, win->y + 25, 48, 18, "Abrir", 0);
+    gui_draw_button(win->x + 116, win->y + 25, 54, 18, "Salvar", 0);
+    gui_draw_button(win->x + 174, win->y + 25, 70, 18, "Executar", 0);
+    gui_draw_button(win->x + 248, win->y + 25, 54, 18, "Limpar", 0);
+
+    // Caixinha de nome do arquivo
+    gui_draw_rect(win->x + 308, win->y + 25, 145, 18, GUI_COLOR_BLACK);
+    gui_draw_rect_fill(win->x + 309, win->y + 26, 143, 16, GUI_COLOR_LIGHT_GRAY);
+    gui_draw_string_clipped(win->x + 314, win->y + 27, gui_edit_filename, GUI_COLOR_BLACK, win->x + 448);
+
+    // Inset Frame do Texto
+    int can_x = win->x + 12;
+    int can_y = win->y + 48;
+    int can_w = win->w - 24;
+    int can_h = win->h - 78;
+    gui_draw_inset_frame(can_x, can_y, can_w, can_h);
+
+    // Renderizacao do Texto no Frame
+    int render_l = 0, render_c = 0;
+    int cursor_drawn_x = -1, cursor_drawn_y = -1;
+
+    int max_visible_lines = can_h / 16;
+    int max_visible_cols = can_w / 8;
+
+    for (int p = 0; p <= gui_edit_len; p++) {
+        if (p == gui_cursor_pos) {
+            cursor_drawn_x = can_x + 6 + (render_c * 8);
+            cursor_drawn_y = can_y + 4 + (render_l * 16);
+        }
+
+        if (p == gui_edit_len) break;
+
+        char c = gui_edit_buf[p];
+        if (c == '\n') {
+            render_l++;
+            render_c = 0;
+        } else if (c == '\r') {
+            // ignora
+        } else {
+            if (render_l < max_visible_lines && render_c < max_visible_cols) {
+                int cx = can_x + 6 + (render_c * 8);
+                int cy = can_y + 4 + (render_l * 16);
+                gui_draw_char_clipped(cx, cy, c, GUI_COLOR_BLACK, can_x + 2, can_x + can_w - 4, can_y + 2, can_y + can_h - 4);
+            }
+            render_c++;
+        }
+    }
+
+    // Desenha cursor vertical |
+    if (cursor_drawn_x >= can_x + 4 && cursor_drawn_x <= can_x + can_w - 4 &&
+        cursor_drawn_y >= can_y + 2 && cursor_drawn_y <= can_y + can_h - 14) {
+        gui_draw_line_v(cursor_drawn_x, cursor_drawn_y, 14, GUI_COLOR_BLACK);
+        gui_draw_line_v(cursor_drawn_x + 1, cursor_drawn_y, 14, GUI_COLOR_BLACK);
+    }
+
+    // Linha de Status inferior do Editor
+    char ed_status[80];
+    sprintf(ed_status, "%d B | %s", gui_edit_len, gui_edit_dirty ? "[Modificado]" : "[Salvo no Disco ATA]");
+    gui_draw_string_win(win, 14, win->h - 22, ed_status, GUI_COLOR_DARK_GRAY);
+}
+
+static void render_win_script_out(gui_window_t* win) {
+    if (!win->is_open) return;
+    gui_draw_window(win);
+
+    gui_draw_string_win(win, 14, 28, "Log de Execucao do Interpretador .txt:", GUI_COLOR_DARK_GRAY);
+    gui_draw_inset_frame(win->x + 12, win->y + 48, win->w - 24, win->h - 80);
+
+    // Renderiza linhas de saida do script
+    int out_l = 0, out_c = 0;
+    for (int p = 0; gui_script_output[p] != '\0' && out_l < 11; p++) {
+        char oc = gui_script_output[p];
+        if (oc == '\n') {
+            out_l++;
+            out_c = 0;
+        } else {
+            if (out_c < 48) {
+                int ox = win->x + 16 + (out_c * 8);
+                int oy = win->y + 54 + (out_l * 16);
+                gui_draw_char_clipped(ox, oy, oc, GUI_COLOR_BLACK, win->x + 14, win->x + win->w - 14, win->y + 50, win->y + win->h - 36);
+            }
+            out_c++;
+        }
+    }
+
+    gui_draw_button(win->x + win->w - 85, win->y + win->h - 26, 70, 20, "Fechar", 0);
+}
+
+// Ponto de entrada do Ambiente Grafico (Mac OS System 7 Classic Desktop)
 void gui_launch_desktop(void) {
     backbuffer = (uint32_t*)kmalloc(GUI_SCREEN_SIZE);
     if (!backbuffer) return;
@@ -408,34 +729,128 @@ void gui_launch_desktop(void) {
 
     // Janela 1: Perfil do Sistema (About)
     gui_window_t win_about = {
-        .x = 40, .y = 50, .w = 460, .h = 340,
+        .x = 40, .y = 45, .w = 460, .h = 340,
         .title = "System Profile - About migOS",
         .is_open = 1, .is_dragging = 0,
         .drag_off_x = 0, .drag_off_y = 0
     };
 
-    // Janela 2: migOS HD (Visualizador de arquivos do RAMDisk)
+    // Janela 2: migOS HD (Visualizador de arquivos do disco/RAMDisk)
     gui_window_t win_files = {
-        .x = 60, .y = 70, .w = 430, .h = 300,
-        .title = "migOS HD - 5 itens",
+        .x = 60, .y = 65, .w = 440, .h = 310,
+        .title = "migOS HD - Volume Persistente",
         .is_open = 0, .is_dragging = 0,
         .drag_off_x = 0, .drag_off_y = 0
     };
 
+    // Janela 3: TextEdit (Editor de Texto com Persistencia em Disco e Script Runner)
+    gui_window_t win_editor = {
+        .x = 75, .y = 48, .w = 465, .h = 355,
+        .title = "TextEdit - readme.txt",
+        .is_open = 0, .is_dragging = 0,
+        .drag_off_x = 0, .drag_off_y = 0
+    };
+
+    // Janela 4: Script Output Window
+    gui_window_t win_script_out = {
+        .x = 100, .y = 80, .w = 430, .h = 280,
+        .title = "Script Runner - Resultado",
+        .is_open = 0, .is_dragging = 0,
+        .drag_off_x = 0, .drag_off_y = 0
+    };
+
+    gui_load_file_to_editor("readme.txt");
+
     int running = 1;
-    int active_menu = 0; // 0 = Nenhum, 1 = migOS, 2 = Special
+    int active_menu = 0; // 0 = Nenhum, 1 = migOS, 2 = Special, 3 = File
     int hover_menu_item = -1;
-    int selected_icon = 0; // 0 = Nenhum, 1 = HD, 2 = Snake, 3 = Term, 4 = Trash
+    int selected_icon = 0; // 0 = Nenhum, 1 = HD, 2 = TextEdit, 3 = Snake, 4 = Term, 5 = Trash
     uint32_t last_click_time = 0;
     int last_click_icon = 0;
     int prev_left_button = 0;
 
     while (running) {
-        // 1. Processa Teclado (ESC ou Q para sair)
+        // 1. Processa Teclado
         int pressed;
         unsigned char key;
         while (keyboard_get_doom_key(&pressed, &key)) {
-            if (pressed && (key == 27 || key == 'q' || key == 'Q')) {
+            if (!pressed) continue;
+
+            if (key == KEY_ESCAPE) {
+                if (win_script_out.is_open) {
+                    win_script_out.is_open = 0;
+                } else if (win_editor.is_open) {
+                    win_editor.is_open = 0;
+                } else if (win_files.is_open) {
+                    win_files.is_open = 0;
+                } else if (win_about.is_open) {
+                    win_about.is_open = 0;
+                } else {
+                    running = 0;
+                }
+            } else if (win_editor.is_open) {
+                // Entrada no Editor de Texto
+                if (key == KEY_BACKSPACE) {
+                    if (gui_cursor_pos > 0) {
+                        for (int i = gui_cursor_pos - 1; i < gui_edit_len; i++) {
+                            gui_edit_buf[i] = gui_edit_buf[i + 1];
+                        }
+                        gui_edit_len--;
+                        gui_cursor_pos--;
+                        gui_edit_dirty = 1;
+                    }
+                } else if (key == KEY_DELETE) {
+                    if (gui_cursor_pos < gui_edit_len) {
+                        for (int i = gui_cursor_pos; i < gui_edit_len; i++) {
+                            gui_edit_buf[i] = gui_edit_buf[i + 1];
+                        }
+                        gui_edit_len--;
+                        gui_edit_dirty = 1;
+                    }
+                } else if (key == KEY_ENTER) {
+                    if (gui_edit_len < GUI_EDIT_MAX_CHARS - 2) {
+                        for (int i = gui_edit_len; i > gui_cursor_pos; i--) {
+                            gui_edit_buf[i] = gui_edit_buf[i - 1];
+                        }
+                        gui_edit_buf[gui_cursor_pos++] = '\n';
+                        gui_edit_len++;
+                        gui_edit_buf[gui_edit_len] = '\0';
+                        gui_edit_dirty = 1;
+                    }
+                } else if (key == KEY_LEFT_ARROW) {
+                    if (gui_cursor_pos > 0) gui_cursor_pos--;
+                } else if (key == KEY_RIGHT_ARROW) {
+                    if (gui_cursor_pos < gui_edit_len) gui_cursor_pos++;
+                } else if (key == KEY_HOME) {
+                    while (gui_cursor_pos > 0 && gui_edit_buf[gui_cursor_pos - 1] != '\n') {
+                        gui_cursor_pos--;
+                    }
+                } else if (key == KEY_END) {
+                    while (gui_cursor_pos < gui_edit_len && gui_edit_buf[gui_cursor_pos] != '\n') {
+                        gui_cursor_pos++;
+                    }
+                } else if (key == KEY_TAB) {
+                    for (int t = 0; t < 4 && gui_edit_len < GUI_EDIT_MAX_CHARS - 2; t++) {
+                        for (int i = gui_edit_len; i > gui_cursor_pos; i--) {
+                            gui_edit_buf[i] = gui_edit_buf[i - 1];
+                        }
+                        gui_edit_buf[gui_cursor_pos++] = ' ';
+                        gui_edit_len++;
+                        gui_edit_buf[gui_edit_len] = '\0';
+                        gui_edit_dirty = 1;
+                    }
+                } else if (key >= 32 && key <= 126) {
+                    if (gui_edit_len < GUI_EDIT_MAX_CHARS - 2) {
+                        for (int i = gui_edit_len; i > gui_cursor_pos; i--) {
+                            gui_edit_buf[i] = gui_edit_buf[i - 1];
+                        }
+                        gui_edit_buf[gui_cursor_pos++] = (char)key;
+                        gui_edit_len++;
+                        gui_edit_buf[gui_edit_len] = '\0';
+                        gui_edit_dirty = 1;
+                    }
+                }
+            } else if (key == 'q' || key == 'Q') {
                 running = 0;
             }
         }
@@ -458,7 +873,7 @@ void gui_launch_desktop(void) {
         // 3. Processamento de Menus Suspensos
         hover_menu_item = -1;
         if (active_menu == 1) { // Menu migOS
-            if (mx >= 4 && mx <= 164 && my >= 21 && my <= 101) {
+            if (mx >= 4 && mx <= 168 && my >= 21 && my <= 101) {
                 hover_menu_item = (my - 23) / 18;
                 if (hover_menu_item < 0) hover_menu_item = 0;
                 if (hover_menu_item > 3) hover_menu_item = 3;
@@ -466,20 +881,38 @@ void gui_launch_desktop(void) {
             if (click_just_pressed) {
                 if (hover_menu_item == 0 || hover_menu_item == 1) {
                     win_about.is_open = 1;
-                    win_about.x = 40; win_about.y = 50;
+                    win_about.x = 40; win_about.y = 45;
+                    bring_window_to_front(WIN_ID_ABOUT);
+                } else if (hover_menu_item == 2) {
+                    win_editor.is_open = 1;
+                    bring_window_to_front(WIN_ID_EDITOR);
                 } else if (hover_menu_item == 3) {
                     running = 0;
                 }
                 active_menu = 0;
             }
         } else if (active_menu == 2) { // Menu Special
-            if (mx >= 230 && mx <= 400 && my >= 21 && my <= 101) {
+            if (mx >= 230 && mx <= 405 && my >= 21 && my <= 119) {
                 hover_menu_item = (my - 23) / 18;
                 if (hover_menu_item < 0) hover_menu_item = 0;
-                if (hover_menu_item > 3) hover_menu_item = 3;
+                if (hover_menu_item > 4) hover_menu_item = 4;
             }
             if (click_just_pressed) {
-                if (hover_menu_item == 0) { // Snake Game
+                if (hover_menu_item == 0) { // Text Editor
+                    win_editor.is_open = 1;
+                    bring_window_to_front(WIN_ID_EDITOR);
+                } else if (hover_menu_item == 1) { // Game Boy (migBoy)
+                    vga_clear();
+                    const char* gb_rom = migfs_exists("pokemon.gb") ? "pokemon.gb" : (migfs_exists("game.gb") ? "game.gb" : "pokemon.gb");
+                    gameboy_launch(gb_rom);
+                    bga_init();
+                    keyboard_set_doom_mode(1);
+                    mouse_set_bounds(0, 0, GUI_WIDTH - 1, GUI_HEIGHT - 1);
+                    mouse_set_position(GUI_WIDTH / 2, GUI_HEIGHT / 2);
+                    active_menu = 0;
+                    selected_icon = 0;
+                    prev_left_button = 0;
+                } else if (hover_menu_item == 2) { // Snake Game
                     vga_clear();
                     snake_game_main();
                     bga_init();
@@ -489,19 +922,49 @@ void gui_launch_desktop(void) {
                     active_menu = 0;
                     selected_icon = 0;
                     prev_left_button = 0;
-                } else if (hover_menu_item == 2) { // Restart
+                } else if (hover_menu_item == 3) { // Restart
                     reboot_system();
-                } else if (hover_menu_item == 3) { // Shut Down (CLI)
+                } else if (hover_menu_item == 4) { // Shut Down
                     running = 0;
+                }
+                active_menu = 0;
+            }
+        } else if (active_menu == 3) { // Menu File
+            if (mx >= 80 && mx <= 240 && my >= 21 && my <= 101) {
+                hover_menu_item = (my - 23) / 18;
+                if (hover_menu_item < 0) hover_menu_item = 0;
+                if (hover_menu_item > 3) hover_menu_item = 3;
+            }
+            if (click_just_pressed) {
+                if (hover_menu_item == 0) { // New Document
+                    gui_edit_buf[0] = '\0';
+                    gui_edit_len = 0;
+                    gui_cursor_pos = 0;
+                    strcpy(gui_edit_filename, "novo.txt");
+                    gui_edit_dirty = 1;
+                    win_editor.is_open = 1;
+                    bring_window_to_front(WIN_ID_EDITOR);
+                } else if (hover_menu_item == 1) { // Open TextEdit
+                    win_editor.is_open = 1;
+                    bring_window_to_front(WIN_ID_EDITOR);
+                } else if (hover_menu_item == 2) { // Save File
+                    if (win_editor.is_open) gui_save_editor_file();
+                } else if (hover_menu_item == 3) { // Close Window
+                    if (win_script_out.is_open) win_script_out.is_open = 0;
+                    else if (win_editor.is_open) win_editor.is_open = 0;
+                    else if (win_files.is_open) win_files.is_open = 0;
+                    else if (win_about.is_open) win_about.is_open = 0;
                 }
                 active_menu = 0;
             }
         }
 
-        // Clique na Barra de Menus (Y: 0..20)
+        // Clique na Barra de Menus Superior (Y: 0..20)
         if (click_just_pressed && my <= 20) {
             if (mx >= 0 && mx <= 75) {
                 active_menu = (active_menu == 1) ? 0 : 1;
+            } else if (mx >= 80 && mx <= 130) {
+                active_menu = (active_menu == 3) ? 0 : 3;
             } else if (mx >= 230 && mx <= 300) {
                 active_menu = (active_menu == 2) ? 0 : 2;
             } else {
@@ -511,34 +974,164 @@ void gui_launch_desktop(void) {
             active_menu = 0;
         }
 
-        // 4. Processamento de Janelas e Botoes
+        // 4. Processamento de Janelas e Botoes (com prevencao estrita de click-through)
         if (active_menu == 0) {
-            // Janela 1: System Profile
-            if (win_about.is_open) {
-                if (click_just_pressed) {
-                    if (mx >= win_about.x + 4 && mx <= win_about.x + 18 &&
-                        my >= win_about.y + 3 && my <= win_about.y + 17) {
-                        win_about.is_open = 0;
-                    } else if (mx >= win_about.x && mx <= win_about.x + win_about.w &&
-                               my >= win_about.y && my <= win_about.y + 20) {
-                        win_about.is_dragging = 1;
-                        win_about.drag_off_x = mx - win_about.x;
-                        win_about.drag_off_y = my - win_about.y;
-                    }
-                }
-            }
+            int click_handled = 0;
 
-            // Janela 2: migOS HD
-            if (win_files.is_open) {
-                if (click_just_pressed) {
-                    if (mx >= win_files.x + 4 && mx <= win_files.x + 18 &&
-                        my >= win_files.y + 3 && my <= win_files.y + 17) {
-                        win_files.is_open = 0;
-                    } else if (mx >= win_files.x && mx <= win_files.x + win_files.w &&
-                               my >= win_files.y && my <= win_files.y + 20) {
-                        win_files.is_dragging = 1;
-                        win_files.drag_off_x = mx - win_files.x;
-                        win_files.drag_off_y = my - win_files.y;
+            if (click_just_pressed) {
+                // Percorre as janelas da frente para tras (Z-Order)
+                for (int zi = 3; zi >= 0; zi--) {
+                    int wid = z_order[zi];
+
+                    if (wid == WIN_ID_SCRIPT_OUT && win_script_out.is_open) {
+                        if (mx >= win_script_out.x && mx <= win_script_out.x + win_script_out.w &&
+                            my >= win_script_out.y && my <= win_script_out.y + win_script_out.h) {
+                            
+                            bring_window_to_front(WIN_ID_SCRIPT_OUT);
+                            click_handled = 1;
+
+                            if (mx >= win_script_out.x + 4 && mx <= win_script_out.x + 18 &&
+                                my >= win_script_out.y + 3 && my <= win_script_out.y + 17) {
+                                win_script_out.is_open = 0;
+                            } else if (my <= win_script_out.y + 20) {
+                                win_script_out.is_dragging = 1;
+                                win_script_out.drag_off_x = mx - win_script_out.x;
+                                win_script_out.drag_off_y = my - win_script_out.y;
+                            } else if (mx >= win_script_out.x + win_script_out.w - 85 && mx <= win_script_out.x + win_script_out.w - 15 &&
+                                       my >= win_script_out.y + win_script_out.h - 26 && my <= win_script_out.y + win_script_out.h - 8) {
+                                win_script_out.is_open = 0;
+                            }
+                            break;
+                        }
+                    } else if (wid == WIN_ID_EDITOR && win_editor.is_open) {
+                        if (mx >= win_editor.x && mx <= win_editor.x + win_editor.w &&
+                            my >= win_editor.y && my <= win_editor.y + win_editor.h) {
+                            
+                            bring_window_to_front(WIN_ID_EDITOR);
+                            click_handled = 1;
+
+                            if (mx >= win_editor.x + 4 && mx <= win_editor.x + 18 &&
+                                my >= win_editor.y + 3 && my <= win_editor.y + 17) {
+                                win_editor.is_open = 0;
+                            } else if (my <= win_editor.y + 20) {
+                                win_editor.is_dragging = 1;
+                                win_editor.drag_off_x = mx - win_editor.x;
+                                win_editor.drag_off_y = my - win_editor.y;
+                            }
+                            // Botoes da Barra de Ferramentas
+                            else if (my >= win_editor.y + 25 && my <= win_editor.y + 44) {
+                                if (mx >= win_editor.x + 12 && mx <= win_editor.x + 60) {
+                                    gui_edit_buf[0] = '\0';
+                                    gui_edit_len = 0;
+                                    gui_cursor_pos = 0;
+                                    strcpy(gui_edit_filename, "novo.txt");
+                                    gui_edit_dirty = 1;
+                                } else if (mx >= win_editor.x + 64 && mx <= win_editor.x + 112) {
+                                    static int open_idx = 0;
+                                    size_t total_f = migfs_get_file_count();
+                                    if (total_f > 0) {
+                                        open_idx = (open_idx + 1) % total_f;
+                                        migfs_file_t* mf = migfs_get_file_by_index(open_idx);
+                                        if (mf) gui_load_file_to_editor(mf->name);
+                                    }
+                                } else if (mx >= win_editor.x + 116 && mx <= win_editor.x + 170) {
+                                    gui_save_editor_file();
+                                } else if (mx >= win_editor.x + 174 && mx <= win_editor.x + 244) {
+                                    gui_save_editor_file();
+                                    script_run_buffer_capture(gui_edit_buf, gui_script_output, sizeof(gui_script_output));
+                                    win_script_out.is_open = 1;
+                                    win_script_out.x = win_editor.x + 20;
+                                    win_script_out.y = win_editor.y + 30;
+                                    bring_window_to_front(WIN_ID_SCRIPT_OUT);
+                                } else if (mx >= win_editor.x + 248 && mx <= win_editor.x + 300) {
+                                    gui_edit_buf[0] = '\0';
+                                    gui_edit_len = 0;
+                                    gui_cursor_pos = 0;
+                                    gui_edit_dirty = 1;
+                                }
+                            }
+                            // Clique no canvas de texto para posicionar o cursor
+                            else if (mx >= win_editor.x + 12 && mx <= win_editor.x + win_editor.w - 12 &&
+                                     my >= win_editor.y + 48 && my <= win_editor.y + win_editor.h - 30) {
+                                int click_line = (my - (win_editor.y + 54)) / 16;
+                                int click_col = (mx - (win_editor.x + 18)) / 8;
+                                if (click_line < 0) click_line = 0;
+                                if (click_col < 0) click_col = 0;
+
+                                int cur_l = 0, p = 0;
+                                while (p < gui_edit_len && cur_l < click_line) {
+                                    if (gui_edit_buf[p] == '\n') cur_l++;
+                                    p++;
+                                }
+                                int cur_c = 0;
+                                while (p < gui_edit_len && gui_edit_buf[p] != '\n' && cur_c < click_col) {
+                                    p++;
+                                    cur_c++;
+                                }
+                                gui_cursor_pos = p;
+                            }
+                            break;
+                        }
+                    } else if (wid == WIN_ID_FILES && win_files.is_open) {
+                        if (mx >= win_files.x && mx <= win_files.x + win_files.w &&
+                            my >= win_files.y && my <= win_files.y + win_files.h) {
+                            
+                            bring_window_to_front(WIN_ID_FILES);
+                            click_handled = 1;
+
+                            if (mx >= win_files.x + 4 && mx <= win_files.x + 18 &&
+                                my >= win_files.y + 3 && my <= win_files.y + 17) {
+                                win_files.is_open = 0;
+                            } else if (my <= win_files.y + 20) {
+                                win_files.is_dragging = 1;
+                                win_files.drag_off_x = mx - win_files.x;
+                                win_files.drag_off_y = my - win_files.y;
+                            }
+                            // Clique em um arquivo na lista para abrir no TextEdit
+                            else if (mx >= win_files.x + 12 && mx <= win_files.x + win_files.w - 12 &&
+                                     my >= win_files.y + 54 && my <= win_files.y + win_files.h - 10) {
+                                size_t fcount = migfs_get_file_count();
+                                int file_click_idx = (my - (win_files.y + 54)) / 24;
+                                if (file_click_idx >= 0 && (size_t)file_click_idx < fcount && file_click_idx < 10) {
+                                    migfs_file_t* clicked_f = migfs_get_file_by_index(file_click_idx);
+                                    if (clicked_f) {
+                                        if (strstr(clicked_f->name, ".gb")) {
+                                            vga_clear();
+                                            gameboy_launch(clicked_f->name);
+                                            bga_init();
+                                            keyboard_set_doom_mode(1);
+                                            mouse_set_bounds(0, 0, GUI_WIDTH - 1, GUI_HEIGHT - 1);
+                                            mouse_set_position(GUI_WIDTH / 2, GUI_HEIGHT / 2);
+                                            active_menu = 0;
+                                            selected_icon = 0;
+                                            prev_left_button = 0;
+                                        } else {
+                                            gui_load_file_to_editor(clicked_f->name);
+                                            win_editor.is_open = 1;
+                                            bring_window_to_front(WIN_ID_EDITOR);
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    } else if (wid == WIN_ID_ABOUT && win_about.is_open) {
+                        if (mx >= win_about.x && mx <= win_about.x + win_about.w &&
+                            my >= win_about.y && my <= win_about.y + win_about.h) {
+                            
+                            bring_window_to_front(WIN_ID_ABOUT);
+                            click_handled = 1;
+
+                            if (mx >= win_about.x + 4 && mx <= win_about.x + 18 &&
+                                my >= win_about.y + 3 && my <= win_about.y + 17) {
+                                win_about.is_open = 0;
+                            } else if (my <= win_about.y + 20) {
+                                win_about.is_dragging = 1;
+                                win_about.drag_off_x = mx - win_about.x;
+                                win_about.drag_off_y = my - win_about.y;
+                            }
+                            break;
+                        }
                     }
                 }
             }
@@ -546,6 +1139,8 @@ void gui_launch_desktop(void) {
             if (!mouse.left_button) {
                 win_about.is_dragging = 0;
                 win_files.is_dragging = 0;
+                win_editor.is_dragging = 0;
+                win_script_out.is_dragging = 0;
             }
 
             if (win_about.is_dragging) {
@@ -562,25 +1157,49 @@ void gui_launch_desktop(void) {
                 if (win_files.y < 22) win_files.y = 22;
             }
 
-            // 5. Processamento de Icones do Desktop (Lado Direito: X=560..635)
-            if (click_just_pressed && !win_about.is_dragging && !win_files.is_dragging) {
+            if (win_editor.is_dragging) {
+                win_editor.x = mx - win_editor.drag_off_x;
+                win_editor.y = my - win_editor.drag_off_y;
+                if (win_editor.x < 4) win_editor.x = 4;
+                if (win_editor.y < 22) win_editor.y = 22;
+            }
+
+            if (win_script_out.is_dragging) {
+                win_script_out.x = mx - win_script_out.drag_off_x;
+                win_script_out.y = my - win_script_out.drag_off_y;
+                if (win_script_out.x < 4) win_script_out.x = 4;
+                if (win_script_out.y < 22) win_script_out.y = 22;
+            }
+
+            // 5. Processamento de Icones do Desktop (apenas se o clique nao foi absorvido por nenhuma janela)
+            if (click_just_pressed && !click_handled &&
+                !win_about.is_dragging && !win_files.is_dragging && !win_editor.is_dragging && !win_script_out.is_dragging) {
+                
                 int clicked_icon = 0;
 
-                // Icone 1: migOS HD (x: 560..630, y: 30..80)
-                if (mx >= 560 && mx <= 630 && my >= 30 && my <= 80) {
+                // Icone 1: migOS HD (x: 560..630, y: 28..78)
+                if (mx >= 560 && mx <= 630 && my >= 28 && my <= 78) {
                     clicked_icon = 1;
                 }
-                // Icone 2: Snake (x: 560..630, y: 110..160)
-                else if (mx >= 560 && mx <= 630 && my >= 110 && my <= 160) {
+                // Icone 2: TextEdit (x: 560..630, y: 94..144)
+                else if (mx >= 560 && mx <= 630 && my >= 94 && my <= 144) {
                     clicked_icon = 2;
                 }
-                // Icone 3: Terminal.app (x: 560..630, y: 190..240)
-                else if (mx >= 560 && mx <= 630 && my >= 190 && my <= 240) {
+                // Icone 3: Pokemon.app (x: 560..630, y: 160..210)
+                else if (mx >= 560 && mx <= 630 && my >= 160 && my <= 210) {
                     clicked_icon = 3;
                 }
-                // Icone 4: Trash (x: 560..630, y: 380..440)
-                else if (mx >= 560 && mx <= 630 && my >= 380 && my <= 440) {
+                // Icone 4: Snake (x: 560..630, y: 226..276)
+                else if (mx >= 560 && mx <= 630 && my >= 226 && my <= 276) {
                     clicked_icon = 4;
+                }
+                // Icone 5: Terminal.app (x: 560..630, y: 292..342)
+                else if (mx >= 560 && mx <= 630 && my >= 292 && my <= 342) {
+                    clicked_icon = 5;
+                }
+                // Icone 6: Trash (x: 560..630, y: 380..440)
+                else if (mx >= 560 && mx <= 630 && my >= 380 && my <= 440) {
+                    clicked_icon = 6;
                 }
 
                 if (clicked_icon != 0) {
@@ -588,8 +1207,24 @@ void gui_launch_desktop(void) {
                     if (last_click_icon == clicked_icon && (now - last_click_time) < 40) {
                         if (clicked_icon == 1) {
                             win_files.is_open = 1;
-                            win_files.x = 70; win_files.y = 80;
+                            win_files.x = 60; win_files.y = 65;
+                            bring_window_to_front(WIN_ID_FILES);
                         } else if (clicked_icon == 2) {
+                            win_editor.is_open = 1;
+                            win_editor.x = 75; win_editor.y = 48;
+                            bring_window_to_front(WIN_ID_EDITOR);
+                        } else if (clicked_icon == 3) {
+                            vga_clear();
+                            const char* gb_rom = migfs_exists("PokemonRed.gb") ? "PokemonRed.gb" : (migfs_exists("pokemon.gb") ? "pokemon.gb" : "PokemonRed.gb");
+                            gameboy_launch(gb_rom);
+                            bga_init();
+                            keyboard_set_doom_mode(1);
+                            mouse_set_bounds(0, 0, GUI_WIDTH - 1, GUI_HEIGHT - 1);
+                            mouse_set_position(GUI_WIDTH / 2, GUI_HEIGHT / 2);
+                            active_menu = 0;
+                            selected_icon = 0;
+                            prev_left_button = 0;
+                        } else if (clicked_icon == 4) {
                             vga_clear();
                             snake_game_main();
                             bga_init();
@@ -599,13 +1234,13 @@ void gui_launch_desktop(void) {
                             active_menu = 0;
                             selected_icon = 0;
                             prev_left_button = 0;
-                        } else if (clicked_icon == 3) {
+                        } else if (clicked_icon == 5) {
                             running = 0;
                         }
                     }
                     last_click_icon = clicked_icon;
                     last_click_time = now;
-                } else if (my > 20 && (!win_about.is_open || mx < win_about.x || mx > win_about.x + win_about.w || my < win_about.y || my > win_about.y + win_about.h)) {
+                } else if (my > 20) {
                     selected_icon = 0;
                 }
             }
@@ -618,96 +1253,71 @@ void gui_launch_desktop(void) {
 
         // Renderiza Icones no Desktop
         // Icone 1: migOS HD
-        draw_icon_24x18(580, 35, icon_hd_24x18);
+        draw_icon_24x18(580, 32, icon_hd_24x18);
         if (selected_icon == 1) {
-            gui_draw_rect_fill(562, 58, 60, 18, GUI_COLOR_BLACK);
-            gui_draw_string(566, 60, "migOS HD", GUI_COLOR_WHITE);
+            gui_draw_rect_fill(562, 54, 60, 18, GUI_COLOR_BLACK);
+            gui_draw_string(566, 56, "migOS HD", GUI_COLOR_WHITE);
         } else {
-            gui_draw_string(566, 60, "migOS HD", GUI_COLOR_BLACK);
+            gui_draw_string(566, 56, "migOS HD", GUI_COLOR_BLACK);
         }
 
-        // Icone 2: Snake.app
-        draw_icon_24x18(580, 115, icon_snake_24x18);
+        // Icone 2: TextEdit.app
+        draw_icon_24x18(580, 98, icon_edit_24x18);
         if (selected_icon == 2) {
-            gui_draw_rect_fill(564, 138, 56, 18, GUI_COLOR_BLACK);
-            gui_draw_string(568, 140, "Snake", GUI_COLOR_WHITE);
+            gui_draw_rect_fill(560, 120, 64, 18, GUI_COLOR_BLACK);
+            gui_draw_string(564, 122, "TextEdit", GUI_COLOR_WHITE);
         } else {
-            gui_draw_string(568, 140, "Snake", GUI_COLOR_BLACK);
+            gui_draw_string(564, 122, "TextEdit", GUI_COLOR_BLACK);
         }
 
-        // Icone 3: Terminal.app
-        draw_icon_24x18(580, 195, icon_term_24x18);
+        // Icone 3: Pokemon.app
+        draw_icon_24x18(580, 164, icon_pokemon_24x18);
         if (selected_icon == 3) {
-            gui_draw_rect_fill(558, 218, 68, 18, GUI_COLOR_BLACK);
-            gui_draw_string(562, 220, "Terminal", GUI_COLOR_WHITE);
+            gui_draw_rect_fill(560, 186, 64, 18, GUI_COLOR_BLACK);
+            gui_draw_string(564, 188, "Pokemon", GUI_COLOR_WHITE);
         } else {
-            gui_draw_string(562, 220, "Terminal", GUI_COLOR_BLACK);
+            gui_draw_string(564, 188, "Pokemon", GUI_COLOR_BLACK);
         }
 
-        // Icone 4: Trash
-        draw_icon_trash_20x22(582, 385, icon_trash_20x22);
+        // Icone 4: Snake.app
+        draw_icon_24x18(580, 230, icon_snake_24x18);
         if (selected_icon == 4) {
+            gui_draw_rect_fill(564, 252, 56, 18, GUI_COLOR_BLACK);
+            gui_draw_string(568, 254, "Snake", GUI_COLOR_WHITE);
+        } else {
+            gui_draw_string(568, 254, "Snake", GUI_COLOR_BLACK);
+        }
+
+        // Icone 5: Terminal.app
+        draw_icon_24x18(580, 296, icon_term_24x18);
+        if (selected_icon == 5) {
+            gui_draw_rect_fill(558, 318, 68, 18, GUI_COLOR_BLACK);
+            gui_draw_string(562, 320, "Terminal", GUI_COLOR_WHITE);
+        } else {
+            gui_draw_string(562, 320, "Terminal", GUI_COLOR_BLACK);
+        }
+
+        // Icone 6: Trash
+        draw_icon_trash_20x22(582, 385, icon_trash_20x22);
+        if (selected_icon == 6) {
             gui_draw_rect_fill(566, 412, 52, 18, GUI_COLOR_BLACK);
             gui_draw_string(570, 414, "Trash", GUI_COLOR_WHITE);
         } else {
             gui_draw_string(570, 414, "Trash", GUI_COLOR_BLACK);
         }
 
-        // Renderiza Janela de Arquivos (migOS HD) se aberta
-        if (win_files.is_open) {
-            gui_draw_window(&win_files);
-            gui_draw_string_win(&win_files, 12, 28, "Volume de Arquivos RAMDisk (MIGFS):", GUI_COLOR_DARK_GRAY);
-            gui_draw_line_h(win_files.x + 12, win_files.y + 48, win_files.w - 24, GUI_COLOR_LIGHT_GRAY);
-
-            size_t fcount = migfs_get_file_count();
-            int file_rel_y = 56;
-            for (size_t i = 0; i < fcount && i < 10; i++) {
-                migfs_file_t* f = migfs_get_file_by_index(i);
-                if (f) {
-                    draw_icon_24x18(win_files.x + 14, win_files.y + file_rel_y, icon_hd_24x18);
-                    gui_draw_string_win(&win_files, 44, file_rel_y + 2, f->name, GUI_COLOR_BLACK);
-
-                    char sz_str[32];
-                    sprintf(sz_str, "%u Bytes", (unsigned int)f->size);
-                    gui_draw_string_win(&win_files, 220, file_rel_y + 2, sz_str, GUI_COLOR_DARK_GRAY);
-
-                    const char* attr_str = (f->flags & MIGFS_FILE_READONLY) ? "[RO]" : "[RW]";
-                    gui_draw_string_win(&win_files, 340, file_rel_y + 2, attr_str, GUI_COLOR_DARK_GRAY);
-
-                    file_rel_y += 24;
-                }
+        // Renderiza Janelas na ordem do Z-Order (do fundo para a frente)
+        for (int zi = 0; zi < 4; zi++) {
+            int wid = z_order[zi];
+            if (wid == WIN_ID_ABOUT) {
+                render_win_about(&win_about);
+            } else if (wid == WIN_ID_FILES) {
+                render_win_files(&win_files);
+            } else if (wid == WIN_ID_EDITOR) {
+                render_win_editor(&win_editor);
+            } else if (wid == WIN_ID_SCRIPT_OUT) {
+                render_win_script_out(&win_script_out);
             }
-        }
-
-        // Renderiza Janela Principal (System Profile) se aberta
-        if (win_about.is_open) {
-            gui_draw_window(&win_about);
-
-            // Icone e Titulo
-            draw_icon_24x18(win_about.x + 14, win_about.y + 28, icon_hd_24x18);
-            gui_draw_string_win(&win_about, 44, 30, "migOS System 7 Classic Desktop", GUI_COLOR_BLACK);
-
-            gui_draw_line_h(win_about.x + 12, win_about.y + 52, win_about.w - 24, GUI_COLOR_LIGHT_GRAY);
-
-            // Detalhes Completos do Sistema
-            gui_draw_string_win(&win_about, 14, 60, "Sistema Operacional: migOS Kernel v0.5", GUI_COLOR_DARK_GRAY);
-            gui_draw_string_win(&win_about, 14, 82, "Arquitetura: x86 IA-32 / Modo Protegido (Ring 0)", GUI_COLOR_DARK_GRAY);
-
-            char mem_str[64];
-            sprintf(mem_str, "Memoria Fisica (PMM): %u MB (16,384 Frames 4KB)", (unsigned int)(pmm_get_total_memory() / (1024 * 1024)));
-            gui_draw_string_win(&win_about, 14, 104, mem_str, GUI_COLOR_DARK_GRAY);
-
-            sprintf(mem_str, "Heap Dinamico: %u KB Livres de 8 MB", (unsigned int)(kheap_get_free_bytes() / 1024));
-            gui_draw_string_win(&win_about, 14, 126, mem_str, GUI_COLOR_DARK_GRAY);
-
-            gui_draw_string_win(&win_about, 14, 148, "Display: 640x480 @ 32-bit True Color (Bochs/QEMU BGA)", GUI_COLOR_DARK_GRAY);
-            gui_draw_string_win(&win_about, 14, 170, "Sistema de Arquivos: RAMDisk MIGFS (5 Arquivos)", GUI_COLOR_DARK_GRAY);
-            gui_draw_string_win(&win_about, 14, 192, "Mouse: PS/2 IntelliMouse com Roda de Rolagem", GUI_COLOR_DARK_GRAY);
-
-            gui_draw_line_h(win_about.x + 12, win_about.y + 220, win_about.w - 24, GUI_COLOR_LIGHT_GRAY);
-
-            gui_draw_string_win(&win_about, 14, 234, "Arraste a janela ou feche no botao [X]", GUI_COLOR_ACCENT_BLUE);
-            gui_draw_string_win(&win_about, 14, 256, "Pressione [ESC] para retornar ao Terminal CLI", GUI_COLOR_DARK_GRAY);
         }
 
         // Renderiza Barra de Menus Superior

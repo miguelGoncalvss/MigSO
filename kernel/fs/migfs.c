@@ -1,11 +1,144 @@
 #include <fs/migfs.h>
 #include <kernel/kheap.h>
 #include <libc/string.h>
+#include <libc/stdio.h>
 #include <drivers/ata.h>
 
 static migfs_file_t file_table[MIGFS_MAX_FILES];
+static int migfs_is_disk_backed = 0;
 
-// Arquivos embutidos na imagem do migOS carregados durante o boot
+int migfs_is_persisted(void) {
+    return migfs_is_disk_backed;
+}
+
+// Sincroniza todos os arquivos da memoria RAM com o disco ATA (LBA 1025+)
+int migfs_sync_to_disk(void) {
+    if (!ata_is_available()) {
+        return -1;
+    }
+
+    migfs_disk_entry_t entries[MIGFS_MAX_FILES];
+    memset(entries, 0, sizeof(entries));
+
+    uint32_t current_lba = MIGFS_DATA_START_LBA;
+    uint32_t active_count = 0;
+
+    for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
+        if (file_table[i].in_use && file_table[i].name[0] != '\0') {
+            strncpy(entries[i].name, file_table[i].name, MIGFS_MAX_FILENAME - 1);
+            entries[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
+            entries[i].size = file_table[i].size;
+            entries[i].flags = file_table[i].flags;
+            entries[i].in_use = 1;
+
+            uint32_t sectors = (file_table[i].size + 511) / 512;
+            if (sectors == 0 && file_table[i].size > 0) sectors = 1;
+
+            entries[i].sector_count = sectors;
+            entries[i].start_sector = current_lba;
+
+            if (sectors > 0 && file_table[i].data) {
+                for (uint32_t s = 0; s < sectors; s++) {
+                    char sec_buf[512];
+                    memset(sec_buf, 0, 512);
+                    size_t bytes_to_copy = 512;
+                    if (s * 512 + bytes_to_copy > file_table[i].size) {
+                        bytes_to_copy = file_table[i].size - (s * 512);
+                    }
+                    memcpy(sec_buf, file_table[i].data + (s * 512), bytes_to_copy);
+                    ata_write_sectors(current_lba + s, 1, sec_buf);
+                }
+                current_lba += sectors;
+            }
+            active_count++;
+        }
+    }
+
+    // Grava a tabela de metadados dos arquivos (8 setores a partir de MIGFS_FILE_TABLE_LBA)
+    ata_write_sectors(MIGFS_FILE_TABLE_LBA, MIGFS_FILE_TABLE_SECTORS, entries);
+
+    // Grava o superbloco no setor LBA 1025
+    migfs_superblock_t sb;
+    memset(&sb, 0, sizeof(sb));
+    sb.magic = MIGFS_MAGIC;
+    sb.version = MIGFS_VERSION;
+    sb.file_count = active_count;
+    sb.next_free_lba = current_lba;
+    sb.total_sectors = 32000;
+    strncpy(sb.label, "migOS_PERSISTENT_HD", 31);
+    sb.label[31] = '\0';
+
+    ata_write_sectors(MIGFS_SUPER_LBA, 1, &sb);
+    ata_flush();
+
+    migfs_is_disk_backed = 1;
+    return 0;
+}
+
+// Carrega os arquivos persistidos do disco ATA para a memoria
+int migfs_load_from_disk(void) {
+    if (!ata_is_available()) {
+        return -1;
+    }
+
+    migfs_superblock_t sb;
+    memset(&sb, 0, sizeof(sb));
+    if (ata_read_sectors(MIGFS_SUPER_LBA, 1, &sb) != 0) {
+        return -2;
+    }
+
+    if (sb.magic != MIGFS_MAGIC) {
+        return -3; // Superbloco invalido ou disco virgem
+    }
+
+    migfs_disk_entry_t entries[MIGFS_MAX_FILES];
+    memset(entries, 0, sizeof(entries));
+    if (ata_read_sectors(MIGFS_FILE_TABLE_LBA, MIGFS_FILE_TABLE_SECTORS, entries) != 0) {
+        return -4;
+    }
+
+    // Limpa tabela em memoria antes de preencher
+    for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
+        if (file_table[i].in_use && file_table[i].data) {
+            kfree(file_table[i].data);
+        }
+        memset(&file_table[i], 0, sizeof(migfs_file_t));
+    }
+
+    for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
+        if (entries[i].in_use && entries[i].name[0] != '\0') {
+            strncpy(file_table[i].name, entries[i].name, MIGFS_MAX_FILENAME - 1);
+            file_table[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
+            file_table[i].size = entries[i].size;
+            file_table[i].flags = entries[i].flags;
+            file_table[i].in_use = 1;
+
+            file_table[i].data = (char*)kmalloc(entries[i].size + 1);
+            if (!file_table[i].data) {
+                continue;
+            }
+
+            if (entries[i].size > 0 && entries[i].sector_count > 0) {
+                for (uint32_t s = 0; s < entries[i].sector_count; s++) {
+                    char sec_buf[512];
+                    if (ata_read_sectors(entries[i].start_sector + s, 1, sec_buf) == 0) {
+                        size_t bytes_to_copy = 512;
+                        if (s * 512 + bytes_to_copy > entries[i].size) {
+                            bytes_to_copy = entries[i].size - (s * 512);
+                        }
+                        memcpy(file_table[i].data + (s * 512), sec_buf, bytes_to_copy);
+                    }
+                }
+            }
+            file_table[i].data[entries[i].size] = '\0';
+        }
+    }
+
+    migfs_is_disk_backed = 1;
+    return 0;
+}
+
+// Arquivos embutidos na imagem do migOS carregados no primeiro boot
 static void migfs_load_embedded_files(void) {
     const char* readme_content = 
         "====================================================\n"
@@ -17,16 +150,21 @@ static void migfs_load_embedded_files(void) {
         " [OK] Bootloader MBR (16-bit) -> Protected Mode (32-bit)\n"
         " [OK] GDT (4GB Flat) e IDT (256 Vetores de Interrupcao)\n"
         " [OK] PIC 8259A & PIT 8254 Timer (100 Hz)\n"
-        " [OK] Driver de Teclado PS/2 com fila assincrona\n"
-        " [OK] Driver de Video VGA 80x25 (Framebuffer 0xB8000)\n"
+        " [OK] Driver de Teclado PS/2 (Shift, Caps, Setas, Modificadores)\n"
+        " [OK] Driver de Video VGA 80x25 / BGA 640x480 True Color\n"
         " [OK] PMM (Physical Memory Manager - Frames 4KB Bitmap)\n"
         " [OK] KHeap (Alocador de Heap kmalloc / kfree)\n"
-        " [OK] RAMDisk / MIGFS (Sistema de Arquivos em Memoria)\n\n"
+        " [OK] MIGFS Persistente com Gravacao em Disco ATA/IDE\n"
+        " [OK] Editor de Texto Visual (CLI: 'edit'/'nano' & GUI: 'TextEdit')\n"
+        " [OK] Interpretador e Executor de Scripts .txt ('run'/'exec')\n\n"
         "Comandos de arquivos no shell:\n"
-        " - ls                   : Lista os arquivos do RAMDisk\n"
+        " - ls                   : Lista os arquivos do disco\n"
         " - cat <arquivo>        : Exibe o conteudo de um arquivo\n"
+        " - edit / nano <arq>    : Abre o Editor de Texto no Terminal\n"
+        " - run / exec <arq.txt> : Executa script ou interpretador .txt\n"
         " - touch <arquivo>      : Cria um novo arquivo vazio\n"
         " - write <arq> <texto>  : Escreve dados em um arquivo\n"
+        " - sync                 : Sincroniza dados com o disco ATA\n"
         " - rm <arquivo>         : Deleta um arquivo\n\n"
         "Digite 'help' para a lista completa de comandos!\n";
 
@@ -60,9 +198,10 @@ static void migfs_load_embedded_files(void) {
         "}\n";
 
     const char* hello_content =
-        "Ola, desenvolvedor! Este arquivo esta armazenado diretamente no\n"
-        "RAMDisk (MIGFS) do migOS!\n"
-        "Voce pode criar, ler, editar e remover arquivos dinamicamente.\n";
+        "Ola, desenvolvedor! Este arquivo esta armazenado e persistido\n"
+        "no disco ATA primario (MIGFS) do migOS!\n"
+        "Voce pode criar, ler, editar e remover arquivos dinamicamente,\n"
+        "tanto pelo terminal (edit/nano) quanto pela interface grafica!\n";
 
     const char* system_cfg_content =
         "OS_NAME=migOS\n"
@@ -72,7 +211,7 @@ static void migfs_load_embedded_files(void) {
         "PMM_FRAME_SIZE=4096\n"
         "HEAP_BASE=0x00200000\n"
         "HEAP_SIZE_INITIAL=1MB\n"
-        "FS_TYPE=MIGFS_RAMDISK\n"
+        "FS_TYPE=MIGFS_ATA_PERSISTENT\n"
         "AUTHOR=Miguel_Goncalves\n";
 
     const char* matrix_quote_content =
@@ -82,25 +221,78 @@ static void migfs_load_embedded_files(void) {
         "e eu te mostro ate onde vai a toca do coelho.\"\n"
         " -- Morpheus (migOS Shell: digite 'matrix')\n";
 
+    const char* demo_script_content =
+        "# Script Demonstrativo do migOS\n"
+        "# Interpretador de Scripts .txt com Operacoes Aritmeticas e Variaveis\n"
+        "echo ====================================================\n"
+        "echo    Iniciando Demonstracao do migOS Script Engine   \n"
+        "echo ====================================================\n"
+        "echo Sistema: migOS IA-32 Bare-Metal Edition\n"
+        "set USER=Miguel\n"
+        "echo Bem-vindo ao interpretador de scripts, $USER!\n"
+        "echo.\n"
+        "echo Executando calculos matematicos no interpretador:\n"
+        "calc 15 + 25 * 2\n"
+        "calc (100 - 20) / 4\n"
+        "calc 256 * 16\n"
+        "echo.\n"
+        "echo Verificando memoria do sistema:\n"
+        "meminfo\n"
+        "echo.\n"
+        "echo Listando arquivos salvos no disco persistente:\n"
+        "ls\n"
+        "echo.\n"
+        "echo [SUCESSO] Script executado com 100% de exito!\n";
+
+    const char* calc_script_content =
+        "# Calculadora e Interpretador Matematico migOS\n"
+        "echo [CALC] Testando operacoes aritmeticas com precedencia:\n"
+        "calc 10 + 20\n"
+        "calc 50 - 18\n"
+        "calc 12 * 12\n"
+        "calc 1024 / 16\n"
+        "calc (10 + 5) * (8 - 2)\n"
+        "calc 256 + 512 + 1024\n"
+        "echo [OK] Todos os calculos foram interpretados e exibidos com sucesso!\n";
+
     migfs_create("readme.txt", readme_content, strlen(readme_content), 0);
     migfs_create("kernel.c", kernel_c_content, strlen(kernel_c_content), 0);
     migfs_create("hello.txt", hello_content, strlen(hello_content), 0);
     migfs_create("system.cfg", system_cfg_content, strlen(system_cfg_content), MIGFS_FILE_READONLY);
     migfs_create("secret.txt", matrix_quote_content, strlen(matrix_quote_content), 0);
+    migfs_create("demo.txt", demo_script_content, strlen(demo_script_content), 0);
+    migfs_create("calc.txt", calc_script_content, strlen(calc_script_content), 0);
 }
 
 void migfs_init(void) {
     memset(file_table, 0, sizeof(file_table));
+
+    // Inicializa disco ATA primario
+    ata_init();
+
+    // Tenta carregar os arquivos existentes do disco
+    int ret = migfs_load_from_disk();
+    if (ret != 0 || migfs_get_file_count() == 0) {
+        // Se o disco ainda nao foi formatado, cria os arquivos padrao e salva no disco
+        migfs_load_embedded_files();
+        migfs_sync_to_disk();
+    }
+}
+
+int migfs_format_disk(void) {
+    memset(file_table, 0, sizeof(file_table));
     migfs_load_embedded_files();
+    return migfs_sync_to_disk();
 }
 
 int migfs_create(const char* name, const char* content, size_t size, uint32_t flags) {
     if (!name || name[0] == '\0') return -1;
     if (strlen(name) >= MIGFS_MAX_FILENAME) return -1;
 
-    // Verifica se arquivo com este nome ja existe
-    if (migfs_exists(name)) {
-        return -2;
+    // Se ja existe, sobrescreve o conteudo
+    migfs_file_t* existing = migfs_open(name);
+    if (existing) {
+        return migfs_write(name, content, size);
     }
 
     // Localiza um slot livre na tabela de arquivos
@@ -124,7 +316,9 @@ int migfs_create(const char* name, const char* content, size_t size, uint32_t fl
             file_table[i].data[size] = '\0';
             file_table[i].in_use = 1;
 
-            return 0; // Criado com sucesso
+            // Persiste automaticamente no disco
+            migfs_sync_to_disk();
+            return 0;
         }
     }
 
@@ -149,13 +343,13 @@ int migfs_add_buffer(const char* name, char* data, size_t size, uint32_t flags) 
     return -4;
 }
 
-#define DOOM_WAD_LBA_START   1025
+#define DOOM_WAD_LBA_START   5000
 #define DOOM_WAD_SIZE        4196020
 #define DOOM_WAD_SECTORS     8196
 
 int load_doom_wad_from_disk(void) {
     if (migfs_exists("doom1.wad")) {
-        return 0; // Já carregado
+        return 0; // Ja carregado
     }
 
     if (!ata_is_available()) {
@@ -167,7 +361,6 @@ int load_doom_wad_from_disk(void) {
         return -2;
     }
 
-    // Leitura em blocos de 256 setores com barra de progresso
     uint32_t sectors_read = 0;
     uint32_t chunk = 256;
 
@@ -188,10 +381,6 @@ int load_doom_wad_from_disk(void) {
         kfree(wad_data);
         return -4;
     }
-
-    int32_t numlumps = *(int32_t*)(wad_data + 4);
-    int32_t infotableofs = *(int32_t*)(wad_data + 8);
-    printf("[MIGFS] DOOM1.WAD carregado: %d lumps, offset %d, base=%p\n", numlumps, infotableofs, wad_data);
 
     migfs_add_buffer("doom1.wad", wad_data, DOOM_WAD_SIZE, MIGFS_FILE_READONLY);
     migfs_add_buffer("DOOM1.WAD", wad_data, DOOM_WAD_SIZE, MIGFS_FILE_READONLY);
@@ -244,6 +433,8 @@ int migfs_write(const char* name, const char* content, size_t size) {
     f->data[size] = '\0';
     f->size = size;
 
+    // Persiste automaticamente no disco ATA
+    migfs_sync_to_disk();
     return 0;
 }
 
@@ -270,6 +461,7 @@ int migfs_append(const char* name, const char* content, size_t size) {
     f->size = new_size;
     f->data[new_size] = '\0';
 
+    migfs_sync_to_disk();
     return 0;
 }
 
@@ -293,6 +485,7 @@ int migfs_delete(const char* name) {
     f->flags = 0;
     f->in_use = 0;
 
+    migfs_sync_to_disk();
     return 0;
 }
 
@@ -327,3 +520,4 @@ migfs_file_t* migfs_get_file_by_index(size_t index) {
     }
     return NULL;
 }
+

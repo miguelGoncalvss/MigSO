@@ -6,9 +6,9 @@
 #include <libc/string.h>
 
 #define BOARD_WIDTH   60
-#define BOARD_HEIGHT  24
+#define BOARD_HEIGHT  20
 #define OFFSET_X      10
-#define OFFSET_Y      2
+#define OFFSET_Y      3
 
 #define MAX_SNAKE_LEN (BOARD_WIDTH * BOARD_HEIGHT)
 
@@ -51,20 +51,20 @@ static void draw_number(int x, int y, int num, unsigned char fg, unsigned char b
 }
 
 static void draw_arena_border(void) {
-    // Top border
+    // Top border (Linha 2)
     draw_char(OFFSET_X - 1, OFFSET_Y - 1, '+', VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     for (int x = 0; x < BOARD_WIDTH; x++) {
         draw_char(OFFSET_X + x, OFFSET_Y - 1, '-', VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     }
     draw_char(OFFSET_X + BOARD_WIDTH, OFFSET_Y - 1, '+', VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
 
-    // Side borders
+    // Side borders (Linhas 3 a 22)
     for (int y = 0; y < BOARD_HEIGHT; y++) {
         draw_char(OFFSET_X - 1, OFFSET_Y + y, '|', VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
         draw_char(OFFSET_X + BOARD_WIDTH, OFFSET_Y + y, '|', VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     }
 
-    // Bottom border
+    // Bottom border (Linha 23)
     draw_char(OFFSET_X - 1, OFFSET_Y + BOARD_HEIGHT, '+', VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     for (int x = 0; x < BOARD_WIDTH; x++) {
         draw_char(OFFSET_X + x, OFFSET_Y + BOARD_HEIGHT, '-', VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
@@ -96,7 +96,7 @@ void snake_game_main(void) {
         int paused = 0;
         int game_over = 0;
 
-        // Posi??o inicial da cobra no centro
+        // Posicao inicial da cobra no centro
         int start_x = BOARD_WIDTH / 4;
         int start_y = BOARD_HEIGHT / 2;
         for (int i = 0; i < snake_len; i++) {
@@ -104,7 +104,7 @@ void snake_game_main(void) {
             snake_y[i] = start_y;
         }
 
-        // Posi??o da comida
+        // Posicao da comida
         int food_x = BOARD_WIDTH / 2;
         int food_y = BOARD_HEIGHT / 2;
 
@@ -123,7 +123,9 @@ void snake_game_main(void) {
         draw_string(64, 0, "Nivel: ", VGA_COLOR_WHITE, VGA_COLOR_BLACK);
         draw_number(71, 0, level, VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
 
-        draw_string(6, 23, "[WASD / Setas] Mover   [Espaco/P] Pausa   [Q/ESC] Sair", VGA_COLOR_DARK_GREY, VGA_COLOR_BLACK);
+        // Rodape de controles - posicionado estritamente abaixo da moldura da arena (Linhas 25 e 26)
+        draw_string(10, 25, "[WASD / Setas] Mover   [Espaco/P] Pausa   [Q/ESC] Sair", VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        draw_string(14, 26, "migOS Arcade Classics | Pressione Q para voltar ao SO", VGA_COLOR_DARK_GREY, VGA_COLOR_BLACK);
 
         // Desenha a comida inicial
         draw_char(OFFSET_X + food_x, OFFSET_Y + food_y, '*', VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);

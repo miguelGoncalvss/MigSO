@@ -121,3 +121,11 @@ int ata_write_sectors(uint32_t lba, uint32_t count, const void* buffer) {
 
     return 0;
 }
+
+int ata_flush(void) {
+    if (!ata_available) return -1;
+    if (ata_wait_ready() != 0) return -2;
+    outb(ATA_PRIMARY_CMD, 0xE7); // ATA_CMD_CACHE_FLUSH
+    if (ata_wait_ready() != 0) return -2;
+    return 0;
+}
