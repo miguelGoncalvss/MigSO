@@ -17,25 +17,25 @@ int migfs_sync_to_disk(void) {
         return -1;
     }
 
-    migfs_disk_entry_t entries[MIGFS_MAX_FILES];
-    memset(entries, 0, sizeof(entries));
+    static migfs_disk_entry_t sync_entries[MIGFS_MAX_FILES];
+    memset(sync_entries, 0, sizeof(sync_entries));
 
     uint32_t current_lba = MIGFS_DATA_START_LBA;
     uint32_t active_count = 0;
 
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
         if (file_table[i].in_use && file_table[i].name[0] != '\0') {
-            strncpy(entries[i].name, file_table[i].name, MIGFS_MAX_FILENAME - 1);
-            entries[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
-            entries[i].size = file_table[i].size;
-            entries[i].flags = file_table[i].flags;
-            entries[i].in_use = 1;
+            strncpy(sync_entries[i].name, file_table[i].name, MIGFS_MAX_FILENAME - 1);
+            sync_entries[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
+            sync_entries[i].size = file_table[i].size;
+            sync_entries[i].flags = file_table[i].flags;
+            sync_entries[i].in_use = 1;
 
             uint32_t sectors = (file_table[i].size + 511) / 512;
             if (sectors == 0 && file_table[i].size > 0) sectors = 1;
 
-            entries[i].sector_count = sectors;
-            entries[i].start_sector = current_lba;
+            sync_entries[i].sector_count = sectors;
+            sync_entries[i].start_sector = current_lba;
 
             if (sectors > 0 && file_table[i].data) {
                 for (uint32_t s = 0; s < sectors; s++) {
@@ -48,14 +48,16 @@ int migfs_sync_to_disk(void) {
                     memcpy(sec_buf, file_table[i].data + (s * 512), bytes_to_copy);
                     ata_write_sectors(current_lba + s, 1, sec_buf);
                 }
-                current_lba += sectors;
             }
+
+            current_lba += (sectors > 0) ? sectors : 1;
             active_count++;
         }
     }
 
-    // Grava a tabela de metadados dos arquivos (8 setores a partir de MIGFS_FILE_TABLE_LBA)
-    ata_write_sectors(MIGFS_FILE_TABLE_LBA, MIGFS_FILE_TABLE_SECTORS, entries);
+    if (ata_write_sectors(MIGFS_FILE_TABLE_LBA, MIGFS_FILE_TABLE_SECTORS, sync_entries) != 0) {
+        return -2;
+    }
 
     // Grava o superbloco no setor LBA 1025
     migfs_superblock_t sb;
@@ -68,7 +70,9 @@ int migfs_sync_to_disk(void) {
     strncpy(sb.label, "migOS_PERSISTENT_HD", 31);
     sb.label[31] = '\0';
 
-    ata_write_sectors(MIGFS_SUPER_LBA, 1, &sb);
+    if (ata_write_sectors(MIGFS_SUPER_LBA, 1, &sb) != 0) {
+        return -3;
+    }
     ata_flush();
 
     migfs_is_disk_backed = 1;
@@ -91,9 +95,9 @@ int migfs_load_from_disk(void) {
         return -3; // Superbloco invalido ou disco virgem
     }
 
-    migfs_disk_entry_t entries[MIGFS_MAX_FILES];
-    memset(entries, 0, sizeof(entries));
-    if (ata_read_sectors(MIGFS_FILE_TABLE_LBA, MIGFS_FILE_TABLE_SECTORS, entries) != 0) {
+    static migfs_disk_entry_t load_entries[MIGFS_MAX_FILES];
+    memset(load_entries, 0, sizeof(load_entries));
+    if (ata_read_sectors(MIGFS_FILE_TABLE_LBA, MIGFS_FILE_TABLE_SECTORS, load_entries) != 0) {
         return -4;
     }
 
@@ -106,31 +110,31 @@ int migfs_load_from_disk(void) {
     }
 
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
-        if (entries[i].in_use && entries[i].name[0] != '\0') {
-            strncpy(file_table[i].name, entries[i].name, MIGFS_MAX_FILENAME - 1);
+        if (load_entries[i].in_use && load_entries[i].name[0] != '\0') {
+            strncpy(file_table[i].name, load_entries[i].name, MIGFS_MAX_FILENAME - 1);
             file_table[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
-            file_table[i].size = entries[i].size;
-            file_table[i].flags = entries[i].flags;
+            file_table[i].size = load_entries[i].size;
+            file_table[i].flags = load_entries[i].flags;
             file_table[i].in_use = 1;
 
-            file_table[i].data = (char*)kmalloc(entries[i].size + 1);
+            file_table[i].data = (char*)kmalloc(load_entries[i].size + 1);
             if (!file_table[i].data) {
                 continue;
             }
 
-            if (entries[i].size > 0 && entries[i].sector_count > 0) {
-                for (uint32_t s = 0; s < entries[i].sector_count; s++) {
+            if (load_entries[i].size > 0 && load_entries[i].sector_count > 0) {
+                for (uint32_t s = 0; s < load_entries[i].sector_count; s++) {
                     char sec_buf[512];
-                    if (ata_read_sectors(entries[i].start_sector + s, 1, sec_buf) == 0) {
+                    if (ata_read_sectors(load_entries[i].start_sector + s, 1, sec_buf) == 0) {
                         size_t bytes_to_copy = 512;
-                        if (s * 512 + bytes_to_copy > entries[i].size) {
-                            bytes_to_copy = entries[i].size - (s * 512);
+                        if (s * 512 + bytes_to_copy > load_entries[i].size) {
+                            bytes_to_copy = load_entries[i].size - (s * 512);
                         }
                         memcpy(file_table[i].data + (s * 512), sec_buf, bytes_to_copy);
                     }
                 }
             }
-            file_table[i].data[entries[i].size] = '\0';
+            file_table[i].data[load_entries[i].size] = '\0';
         }
     }
 
@@ -262,6 +266,15 @@ static void migfs_load_embedded_files(void) {
     migfs_create("secret.txt", matrix_quote_content, strlen(matrix_quote_content), 0);
     migfs_create("demo.txt", demo_script_content, strlen(demo_script_content), 0);
     migfs_create("calc.txt", calc_script_content, strlen(calc_script_content), 0);
+
+    // Pastas padrao e arquivos de exemplo em subdiretorios
+    migfs_mkdir("docs");
+    const char* manual_txt = "Manual migOS:\n- ls / cd / pwd / mkdir / rmdir / mv / cp\n- edit / nano / run / calc / gui\n";
+    migfs_create("docs/manual.txt", manual_txt, strlen(manual_txt), 0);
+
+    migfs_mkdir("scripts");
+    const char* sub_script = "# Script em Subpasta\necho [OK] Executando dentro de /scripts!\ncalc 12 * 8\n";
+    migfs_create("scripts/teste.txt", sub_script, strlen(sub_script), 0);
 }
 
 void migfs_init(void) {
@@ -285,20 +298,145 @@ int migfs_format_disk(void) {
     return migfs_sync_to_disk();
 }
 
+void migfs_path_normalize(const char* path, char* out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    out[0] = '\0';
+    if (!path || path[0] == '\0') {
+        strncpy(out, "/", out_size - 1);
+        out[out_size - 1] = '\0';
+        return;
+    }
+
+    char temp[MIGFS_MAX_FILENAME * 2];
+    size_t ti = 0;
+
+    for (size_t i = 0; path[i] != '\0' && ti < sizeof(temp) - 2; i++) {
+        char c = path[i];
+        if (c == '\\') c = '/';
+        if (c == '/' && ti > 0 && temp[ti - 1] == '/') {
+            continue;
+        }
+        temp[ti++] = c;
+    }
+    temp[ti] = '\0';
+
+    char segments[8][MIGFS_MAX_FILENAME];
+    int seg_count = 0;
+
+    char* p = temp;
+    if (*p == '/') p++;
+
+    while (*p != '\0') {
+        char* start = p;
+        while (*p != '/' && *p != '\0') p++;
+        size_t len = p - start;
+        if (len > 0) {
+            char seg[MIGFS_MAX_FILENAME];
+            if (len >= MIGFS_MAX_FILENAME) len = MIGFS_MAX_FILENAME - 1;
+            strncpy(seg, start, len);
+            seg[len] = '\0';
+
+            if (strcmp(seg, ".") == 0) {
+                // ignora
+            } else if (strcmp(seg, "..") == 0) {
+                if (seg_count > 0) seg_count--;
+            } else {
+                if (seg_count < 8) {
+                    strncpy(segments[seg_count++], seg, MIGFS_MAX_FILENAME - 1);
+                }
+            }
+        }
+        if (*p == '/') p++;
+    }
+
+    if (seg_count == 0) {
+        strncpy(out, "/", out_size - 1);
+        out[out_size - 1] = '\0';
+    } else {
+        out[0] = '\0';
+        for (int i = 0; i < seg_count; i++) {
+            size_t cur = strlen(out);
+            if (cur + 1 + strlen(segments[i]) < out_size) {
+                out[cur] = '/';
+                out[cur + 1] = '\0';
+                strcat(out, segments[i]);
+            }
+        }
+    }
+}
+
+void migfs_path_combine(const char* base, const char* rel, char* out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    if (!rel || rel[0] == '\0') {
+        migfs_path_normalize(base, out, out_size);
+        return;
+    }
+
+    if (rel[0] == '/' || rel[0] == '\\') {
+        migfs_path_normalize(rel, out, out_size);
+        return;
+    }
+
+    char joined[MIGFS_MAX_FILENAME * 2];
+    joined[0] = '\0';
+
+    if (base && base[0] != '\0' && strcmp(base, "/") != 0) {
+        strncpy(joined, base, sizeof(joined) - 1);
+        joined[sizeof(joined) - 1] = '\0';
+        size_t len = strlen(joined);
+        if (len > 0 && joined[len - 1] != '/') {
+            strcat(joined, "/");
+        }
+    } else {
+        strcpy(joined, "/");
+    }
+
+    strncat(joined, rel, sizeof(joined) - strlen(joined) - 1);
+    migfs_path_normalize(joined, out, out_size);
+}
+
+void migfs_get_parent_dir(const char* path, char* out_parent, size_t out_size) {
+    if (!out_parent || out_size == 0) return;
+    char norm[MIGFS_MAX_FILENAME];
+    migfs_path_normalize(path, norm, sizeof(norm));
+
+    if (strcmp(norm, "/") == 0) {
+        strncpy(out_parent, "/", out_size - 1);
+        out_parent[out_size - 1] = '\0';
+        return;
+    }
+
+    char* last_slash = strrchr(norm, '/');
+    if (!last_slash || last_slash == norm) {
+        strncpy(out_parent, "/", out_size - 1);
+        out_parent[out_size - 1] = '\0';
+    } else {
+        *last_slash = '\0';
+        strncpy(out_parent, norm, out_size - 1);
+        out_parent[out_size - 1] = '\0';
+    }
+}
+
 int migfs_create(const char* name, const char* content, size_t size, uint32_t flags) {
     if (!name || name[0] == '\0') return -1;
-    if (strlen(name) >= MIGFS_MAX_FILENAME) return -1;
+
+    char clean_name[MIGFS_MAX_FILENAME];
+    migfs_path_normalize(name, clean_name, sizeof(clean_name));
+
+    const char* target = clean_name;
+    if (target[0] == '/') target++;
+    if (target[0] == '\0') return -1;
 
     // Se ja existe, sobrescreve o conteudo
-    migfs_file_t* existing = migfs_open(name);
+    migfs_file_t* existing = migfs_open(target);
     if (existing) {
-        return migfs_write(name, content, size);
+        return migfs_write(target, content, size);
     }
 
     // Localiza um slot livre na tabela de arquivos
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
         if (!file_table[i].in_use) {
-            strncpy(file_table[i].name, name, MIGFS_MAX_FILENAME - 1);
+            strncpy(file_table[i].name, target, MIGFS_MAX_FILENAME - 1);
             file_table[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
             file_table[i].size = size;
             file_table[i].flags = flags;
@@ -329,9 +467,12 @@ int migfs_add_buffer(const char* name, char* data, size_t size, uint32_t flags) 
     if (!name || name[0] == '\0' || !data) return -1;
     if (migfs_exists(name)) return -2;
 
+    const char* target = name;
+    if (target[0] == '/') target++;
+
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
         if (!file_table[i].in_use) {
-            strncpy(file_table[i].name, name, MIGFS_MAX_FILENAME - 1);
+            strncpy(file_table[i].name, target, MIGFS_MAX_FILENAME - 1);
             file_table[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
             file_table[i].size = size;
             file_table[i].flags = flags;
@@ -390,13 +531,21 @@ int load_doom_wad_from_disk(void) {
 migfs_file_t* migfs_open(const char* name) {
     if (!name || name[0] == '\0') return NULL;
 
-    if (name[0] == '.' && (name[1] == '/' || name[1] == '\\')) {
-        name += 2;
-    }
+    char clean_name[MIGFS_MAX_FILENAME];
+    migfs_path_normalize(name, clean_name, sizeof(clean_name));
+
+    const char* target = clean_name;
+    if (target[0] == '/') target++;
+    if (target[0] == '\0') return NULL;
 
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
-        if (file_table[i].in_use && (strcmp(file_table[i].name, name) == 0 || strcasecmp(file_table[i].name, name) == 0)) {
-            return &file_table[i];
+        if (file_table[i].in_use) {
+            const char* fname = file_table[i].name;
+            if (fname[0] == '/') fname++;
+
+            if (strcmp(fname, target) == 0 || strcasecmp(fname, target) == 0) {
+                return &file_table[i];
+            }
         }
     }
 
@@ -493,6 +642,332 @@ int migfs_exists(const char* name) {
     return migfs_open(name) != NULL;
 }
 
+int migfs_is_dir(const char* path) {
+    if (!path || path[0] == '\0') return 1;
+
+    char clean_name[MIGFS_MAX_FILENAME];
+    migfs_path_normalize(path, clean_name, sizeof(clean_name));
+
+    if (strcmp(clean_name, "/") == 0) return 1;
+
+    const char* target = clean_name;
+    if (target[0] == '/') target++;
+
+    for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
+        if (file_table[i].in_use) {
+            const char* fname = file_table[i].name;
+            if (fname[0] == '/') fname++;
+
+            if ((strcmp(fname, target) == 0 || strcasecmp(fname, target) == 0) &&
+                (file_table[i].flags & MIGFS_FILE_DIRECTORY)) {
+                return 1;
+            }
+
+            size_t tlen = strlen(target);
+            if (strncasecmp(fname, target, tlen) == 0 && fname[tlen] == '/') {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+int migfs_mkdir(const char* path) {
+    if (!path || path[0] == '\0') return -1;
+
+    char clean_name[MIGFS_MAX_FILENAME];
+    migfs_path_normalize(path, clean_name, sizeof(clean_name));
+
+    const char* target = clean_name;
+    if (target[0] == '/') target++;
+    if (target[0] == '\0') return -1;
+
+    if (migfs_exists(target) || migfs_is_dir(target)) {
+        return -2; // Ja existe
+    }
+
+    for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
+        if (!file_table[i].in_use) {
+            strncpy(file_table[i].name, target, MIGFS_MAX_FILENAME - 1);
+            file_table[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
+            file_table[i].size = 0;
+            file_table[i].data = NULL;
+            file_table[i].flags = MIGFS_FILE_DIRECTORY;
+            file_table[i].in_use = 1;
+
+            migfs_sync_to_disk();
+            return 0;
+        }
+    }
+
+    return -4;
+}
+
+int migfs_rmdir(const char* path) {
+    if (!path || path[0] == '\0') return -1;
+
+    char clean_name[MIGFS_MAX_FILENAME];
+    migfs_path_normalize(path, clean_name, sizeof(clean_name));
+
+    const char* target = clean_name;
+    if (target[0] == '/') target++;
+    if (target[0] == '\0') return -1;
+
+    size_t tlen = strlen(target);
+
+    // Verifica se ha arquivos dentro da pasta
+    for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
+        if (file_table[i].in_use) {
+            const char* fname = file_table[i].name;
+            if (fname[0] == '/') fname++;
+
+            if (strncasecmp(fname, target, tlen) == 0 && fname[tlen] == '/') {
+                return -2; // Diretorio nao vazio
+            }
+        }
+    }
+
+    for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
+        if (file_table[i].in_use) {
+            const char* fname = file_table[i].name;
+            if (fname[0] == '/') fname++;
+
+            if ((strcmp(fname, target) == 0 || strcasecmp(fname, target) == 0) &&
+                (file_table[i].flags & MIGFS_FILE_DIRECTORY)) {
+                if (file_table[i].data) {
+                    kfree(file_table[i].data);
+                    file_table[i].data = NULL;
+                }
+                file_table[i].name[0] = '\0';
+                file_table[i].size = 0;
+                file_table[i].flags = 0;
+                file_table[i].in_use = 0;
+
+                migfs_sync_to_disk();
+                return 0;
+            }
+        }
+    }
+
+    return -3;
+}
+
+int migfs_move(const char* src, const char* dest) {
+    if (!src || !dest || src[0] == '\0' || dest[0] == '\0') return -1;
+
+    migfs_file_t* sf = migfs_open(src);
+    if (!sf) return -1;
+
+    if (sf->flags & MIGFS_FILE_READONLY) return -2;
+
+    char clean_dest[MIGFS_MAX_FILENAME];
+    migfs_path_normalize(dest, clean_dest, sizeof(clean_dest));
+
+    const char* d_target = clean_dest;
+    if (d_target[0] == '/') d_target++;
+
+    char new_path[MIGFS_MAX_FILENAME];
+
+    if (migfs_is_dir(clean_dest)) {
+        const char* base_name = sf->name;
+        char* last_slash = strrchr(sf->name, '/');
+        if (last_slash) base_name = last_slash + 1;
+
+        if (d_target[0] == '\0') {
+            strncpy(new_path, base_name, MIGFS_MAX_FILENAME - 1);
+        } else {
+            strncpy(new_path, d_target, MIGFS_MAX_FILENAME - 1);
+            new_path[MIGFS_MAX_FILENAME - 1] = '\0';
+            strncat(new_path, "/", MIGFS_MAX_FILENAME - strlen(new_path) - 1);
+            strncat(new_path, base_name, MIGFS_MAX_FILENAME - strlen(new_path) - 1);
+        }
+    } else {
+        strncpy(new_path, d_target, MIGFS_MAX_FILENAME - 1);
+    }
+    new_path[MIGFS_MAX_FILENAME - 1] = '\0';
+
+    if (sf->flags & MIGFS_FILE_DIRECTORY) {
+        char old_prefix[MIGFS_MAX_FILENAME];
+        char new_prefix[MIGFS_MAX_FILENAME];
+        snprintf(old_prefix, sizeof(old_prefix), "%s/", sf->name);
+        snprintf(new_prefix, sizeof(new_prefix), "%s/", new_path);
+
+        size_t old_plen = strlen(old_prefix);
+        for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
+            if (file_table[i].in_use && &file_table[i] != sf) {
+                if (strncmp(file_table[i].name, old_prefix, old_plen) == 0) {
+                    char child_new[MIGFS_MAX_FILENAME];
+                    snprintf(child_new, sizeof(child_new), "%s%s", new_prefix, file_table[i].name + old_plen);
+                    strncpy(file_table[i].name, child_new, MIGFS_MAX_FILENAME - 1);
+                    file_table[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
+                }
+            }
+        }
+    }
+
+    strncpy(sf->name, new_path, MIGFS_MAX_FILENAME - 1);
+    sf->name[MIGFS_MAX_FILENAME - 1] = '\0';
+
+    migfs_sync_to_disk();
+    return 0;
+}
+
+int migfs_copy(const char* src, const char* dest) {
+    if (!src || !dest || src[0] == '\0' || dest[0] == '\0') return -1;
+
+    migfs_file_t* sf = migfs_open(src);
+    if (!sf) return -1;
+
+    char clean_dest[MIGFS_MAX_FILENAME];
+    migfs_path_normalize(dest, clean_dest, sizeof(clean_dest));
+
+    const char* d_target = clean_dest;
+    if (d_target[0] == '/') d_target++;
+
+    char new_path[MIGFS_MAX_FILENAME];
+
+    if (migfs_is_dir(clean_dest)) {
+        const char* base_name = sf->name;
+        char* last_slash = strrchr(sf->name, '/');
+        if (last_slash) base_name = last_slash + 1;
+
+        if (d_target[0] == '\0') {
+            strncpy(new_path, base_name, MIGFS_MAX_FILENAME - 1);
+        } else {
+            strncpy(new_path, d_target, MIGFS_MAX_FILENAME - 1);
+            new_path[MIGFS_MAX_FILENAME - 1] = '\0';
+            strncat(new_path, "/", MIGFS_MAX_FILENAME - strlen(new_path) - 1);
+            strncat(new_path, base_name, MIGFS_MAX_FILENAME - strlen(new_path) - 1);
+        }
+    } else {
+        strncpy(new_path, d_target, MIGFS_MAX_FILENAME - 1);
+    }
+    new_path[MIGFS_MAX_FILENAME - 1] = '\0';
+
+    if (sf->flags & MIGFS_FILE_DIRECTORY) {
+        return migfs_mkdir(new_path);
+    } else {
+        return migfs_create(new_path, sf->data, sf->size, sf->flags & ~MIGFS_FILE_READONLY);
+    }
+}
+
+int migfs_get_dir_items(const char* dir_path, migfs_dir_item_t* items, size_t max_items, size_t* out_count) {
+    if (!items || max_items == 0 || !out_count) return -1;
+    *out_count = 0;
+
+    char clean_dir[MIGFS_MAX_FILENAME];
+    migfs_path_normalize(dir_path, clean_dir, sizeof(clean_dir));
+
+    const char* target = clean_dir;
+    if (target[0] == '/') target++;
+    size_t target_len = strlen(target);
+
+    size_t count = 0;
+
+    // Adiciona ".." para subir de nivel caso nao esteja na raiz
+    if (strcmp(clean_dir, "/") != 0 && count < max_items) {
+        strncpy(items[count].name, "..", MIGFS_MAX_FILENAME - 1);
+        items[count].name[MIGFS_MAX_FILENAME - 1] = '\0';
+        char parent[MIGFS_MAX_FILENAME];
+        migfs_get_parent_dir(clean_dir, parent, sizeof(parent));
+        strncpy(items[count].full_path, parent, MIGFS_MAX_FILENAME - 1);
+        items[count].full_path[MIGFS_MAX_FILENAME - 1] = '\0';
+        items[count].size = 0;
+        items[count].flags = MIGFS_FILE_DIRECTORY;
+        items[count].is_dir = 1;
+        count++;
+    }
+
+    for (size_t i = 0; i < MIGFS_MAX_FILES && count < max_items; i++) {
+        if (!file_table[i].in_use) continue;
+
+        const char* fname = file_table[i].name;
+        if (fname[0] == '/') fname++;
+        if (fname[0] == '\0') continue;
+
+        size_t flen = strlen(fname);
+
+        if (target_len == 0) {
+            // Listagem da raiz: pega arquivos sem barra ou captura pastas de topo
+            char* slash = strchr(fname, '/');
+            if (!slash) {
+                strncpy(items[count].name, fname, MIGFS_MAX_FILENAME - 1);
+                items[count].name[MIGFS_MAX_FILENAME - 1] = '\0';
+                migfs_path_combine(clean_dir, fname, items[count].full_path, sizeof(items[count].full_path));
+                items[count].size = file_table[i].size;
+                items[count].flags = file_table[i].flags;
+                items[count].is_dir = (file_table[i].flags & MIGFS_FILE_DIRECTORY) ? 1 : 0;
+                count++;
+            } else {
+                size_t dlen = slash - fname;
+                char dirname[MIGFS_MAX_FILENAME];
+                if (dlen >= MIGFS_MAX_FILENAME) dlen = MIGFS_MAX_FILENAME - 1;
+                strncpy(dirname, fname, dlen);
+                dirname[dlen] = '\0';
+
+                int already = 0;
+                for (size_t k = 0; k < count; k++) {
+                    if (strcmp(items[k].name, dirname) == 0) {
+                        already = 1;
+                        break;
+                    }
+                }
+                if (!already && count < max_items) {
+                    strncpy(items[count].name, dirname, MIGFS_MAX_FILENAME - 1);
+                    items[count].name[MIGFS_MAX_FILENAME - 1] = '\0';
+                    migfs_path_combine(clean_dir, dirname, items[count].full_path, sizeof(items[count].full_path));
+                    items[count].size = 0;
+                    items[count].flags = MIGFS_FILE_DIRECTORY;
+                    items[count].is_dir = 1;
+                    count++;
+                }
+            }
+        } else {
+            // Listagem de subdiretorio: ex: target = "docs"
+            if (flen > target_len && strncasecmp(fname, target, target_len) == 0 && fname[target_len] == '/') {
+                const char* rel = fname + target_len + 1;
+                char* slash = strchr(rel, '/');
+                if (!slash) {
+                    strncpy(items[count].name, rel, MIGFS_MAX_FILENAME - 1);
+                    items[count].name[MIGFS_MAX_FILENAME - 1] = '\0';
+                    migfs_path_combine(clean_dir, rel, items[count].full_path, sizeof(items[count].full_path));
+                    items[count].size = file_table[i].size;
+                    items[count].flags = file_table[i].flags;
+                    items[count].is_dir = (file_table[i].flags & MIGFS_FILE_DIRECTORY) ? 1 : 0;
+                    count++;
+                } else {
+                    size_t dlen = slash - rel;
+                    char dirname[MIGFS_MAX_FILENAME];
+                    if (dlen >= MIGFS_MAX_FILENAME) dlen = MIGFS_MAX_FILENAME - 1;
+                    strncpy(dirname, rel, dlen);
+                    dirname[dlen] = '\0';
+
+                    int already = 0;
+                    for (size_t k = 0; k < count; k++) {
+                        if (strcmp(items[k].name, dirname) == 0) {
+                            already = 1;
+                            break;
+                        }
+                    }
+                    if (!already && count < max_items) {
+                        strncpy(items[count].name, dirname, MIGFS_MAX_FILENAME - 1);
+                        items[count].name[MIGFS_MAX_FILENAME - 1] = '\0';
+                        migfs_path_combine(clean_dir, dirname, items[count].full_path, sizeof(items[count].full_path));
+                        items[count].size = 0;
+                        items[count].flags = MIGFS_FILE_DIRECTORY;
+                        items[count].is_dir = 1;
+                        count++;
+                    }
+                }
+            }
+        }
+    }
+
+    *out_count = count;
+    return 0;
+}
+
 size_t migfs_get_file_count(void) {
     size_t count = 0;
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
@@ -520,4 +995,5 @@ migfs_file_t* migfs_get_file_by_index(size_t index) {
     }
     return NULL;
 }
+
 

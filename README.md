@@ -17,11 +17,17 @@ Sistema operacional monolitico de 32 bits desenvolvido do zero para a arquitetur
   - [4. Nucleo do Kernel](#4-nucleo-do-kernel)
   - [5. Gerenciamento de Memoria](#5-gerenciamento-de-memoria)
   - [6. Drivers de Dispositivos](#6-drivers-de-dispositivos)
-  - [7. Sistema de Arquivos (MIGFS / RAMDisk)](#7-sistema-de-arquivos-migfs--ramdisk)
+  - [7. Sistema de Arquivos (MIGFS / RAMDisk & Disco ATA)](#7-sistema-de-arquivos-migfs--ramdisk--disco-ata)
   - [8. Biblioteca C Minimalista (Freestanding LibC)](#8-biblioteca-c-minimalista-freestanding-libc)
   - [9. Shell Interativo](#9-shell-interativo)
   - [10. Interface Grafica (GUI Mac OS System 7 640x480)](#10-interface-grafica-gui-mac-os-system-7-640x480)
   - [11. Jogos e Aplicacoes](#11-jogos-e-aplicacoes)
+  - [12. Editor de Texto Visual (TextEdit & Nano/Edit)](#12-editor-de-texto-visual-textedit--nanoedit)
+  - [13. Interpretador e Executor de Scripts .txt](#13-interpretador-e-executor-de-scripts-txt)
+  - [14. Emulador de Game Boy & Jogo Pokémon (Peanut-GB Bare-Metal)](#14-emulador-de-game-boy--jogo-pokémon-peanut-gb-bare-metal)
+- [Emulador de Game Boy & Jogo Pokémon no migOS](#emulador-de-game-boy--jogo-pokémon-no-migos)
+- [Sistema de Arquivos Hierárquico MIGFS & Persistência em Disco](#sistema-de-arquivos-hierárquico-migfs--persistência-em-disco)
+- [Interpretador de Scripts & Calculadora Matemática](#interpretador-de-scripts--calculadora-matemática)
 - [Ciclo de Inicializacao (Boot Flow)](#ciclo-de-inicializacao-boot-flow)
 - [Mapa de Memoria Fisica](#mapa-de-memoria-fisica)
 - [Arquitetura do Heap Dinamico (KHeap)](#arquitetura-do-heap-dinamico-kheap)
@@ -35,7 +41,7 @@ Sistema operacional monolitico de 32 bits desenvolvido do zero para a arquitetur
 
 ## Visao Geral
 
-O migOS e um kernel bare-metal de 32 bits escrito em C (padrao GNU99 freestanding) e Assembly x86 (NASM). O projeto implementa desde o setor de inicializacao MBR de 512 bytes ate um terminal interativo com historico e um ambiente grafico retro inspirado no classico **Mac OS System 7 (1991)** padronizado na resolucao de **640x480 pixels a 32-bit True Color (ARGB/XRGB)**, passando por gerenciamento de memoria fisica baseado em mapa de bits (PMM Frame Bitmap 4KB), alocador dinamico de memoria no Heap (KHeap com coalescencia e divisao de blocos), sistema de arquivos em memoria RAM (RAMDisk / MIGFS), controle de interrupcoes por hardware (IDT e PIC 8259A), temporizacao precisa por hardware (PIT 8254), driver de video Bochs/QEMU BGA com deteccao dinamica de barramento PCI e Linear Framebuffer (LFB), suporte a teclado e mouse PS/2 com roda de rolagem, biblioteca C freestanding e jogos integrados (Snake Game).
+O migOS e um kernel bare-metal de 32 bits escrito em C (padrao GNU99 freestanding) e Assembly x86 (NASM). O projeto implementa desde o setor de inicializacao MBR de 512 bytes ate um terminal interativo com historico e um ambiente grafico retro inspirado no classico **Mac OS System 7 (1991)** padronizado na resolucao de **640x480 pixels a 32-bit True Color (ARGB/XRGB)**, passando por gerenciamento de memoria fisica baseado em mapa de bits (PMM Frame Bitmap 4KB), alocador dinamico de memoria no Heap (KHeap com coalescencia e divisao de blocos), sistema de arquivos hierárquico com suporte a pastas e persistência real em disco ATA/IDE (MIGFS), controle de interrupcoes por hardware (IDT e PIC 8259A), temporizacao precisa por hardware (PIT 8254), driver de video Bochs/QEMU BGA com deteccao dinamica de barramento PCI e Linear Framebuffer (LFB), suporte a teclado e mouse PS/2 com rastreamento estável de coordenadas, biblioteca C freestanding, editor de texto visual (TextEdit / Edit), interpretador e executor de scripts `.txt` com calculadora aritmética e **Emulador completo de Nintendo Game Boy (Peanut-GB) executando Pokémon Red / Blue / Yellow** diretamente em Ring 0 bare-metal com salvamento e persistência de save games (`.sav`) em disco.
 
 O kernel nao utiliza qualquer biblioteca padrao do sistema hospedeiro (`-ffreestanding -fno-builtin`), operando diretamente sobre o hardware x86 atraves de instrucoes de maquina e portas de entrada/saida (I/O Ports).
 
@@ -51,26 +57,43 @@ O kernel nao utiliza qualquer biblioteca padrao do sistema hospedeiro (`-ffreest
 - Temporizacao periodica em 100 Hz gerada pelo Programmable Interval Timer (PIT 8254), fornecendo medicoes de tempo de atividade (uptime em segundos e milissegundos) e rotinas de espera (`sleep` e `timer_wait`) sincronizadas com a instrucao `hlt`.
 - Gerenciador de Memoria Fisica (PMM) com granularidade de frames de 4 KB gerenciados por mapa de bits (bitmap), protegendo o primeiro 1 MB de memoria fisica e fornecendo alocacao contigua de blocos.
 - Alocador dinamico de memoria do Kernel (KHeap / kmalloc, kfree, kcalloc, krealloc) baseado em lista duplamente encadeada com cabecalhos protegidos por assinatura magica (0x1A2B3C4D), politica First-Fit, divisao automatica de blocos (splitting), fusao de blocos livres adjacentes (coalescing) e autoexpansao sob demanda via PMM.
-- Sistema de Arquivos em RAM (MIGFS / RAMDisk) para manipulacao dinamica de arquivos em memoria, com protecao por flags (somente leitura / leitura e escrita) e persistencia em tempo de execucao.
+- **Sistema de Arquivos Hierárquico e Persistente (MIGFS)**:
+  - Suporte completo a diretórios e subdiretórios hierárquicos (`cd`, `pwd`, `mkdir`, `rmdir`, `mv`, `cp`).
+  - Gravação e leitura persistente de setores LBA no Disco Rígido ATA/IDE primário (Superbloco `0x4D494746` no LBA 1025, Tabela de Descritores e Blocos de Dados).
+  - Sincronização sob demanda com disco rígido (`sync`) e carregamento automático durante o boot.
 - Driver Grafico Bochs/QEMU BGA (Bochs Graphics Adapter) com leitura dinamica do barramento PCI para identificacao do endereco base do Linear Framebuffer (BAR0) e configuracao de modos de video de alta resolucao em 32-bit True Color.
+- **Emulador de Game Boy (Peanut-GB) e Jogo Pokémon Bare-Metal**:
+  - Emulador completo de Game Boy (DMG) portado para Ring 0 bare-metal sem sistema operacional hospedeiro.
+  - Execução fluida de **Pokémon Red**, Pokémon Blue, Pokémon Yellow e outras ROMs comerciais de Game Boy a 60 FPS com upscaling limpo centralizado no display 640x480.
+  - Suporte a controladores de memória de cartucho (MBC1, MBC3, MBC5 com Real-Time Clock RTC).
+  - **Preservação e persistência automática de Saves (.sav)**: O progresso do jogador em Pokémon é salvo e mantido no disco ATA, garantindo que o jogo possa ser continuado mesmo após reiniciar o sistema.
+  - Lançamento direto via terminal (`pokemon`, `gameboy <rom.gb>`, `gb <rom>`) ou via GUI Desktop através de ícone clássico ou duplo-clique em qualquer arquivo `.gb`.
+- **Editor de Texto Visual Integrado (TextEdit & Nano/Edit)**:
+  - No Terminal CLI: Comandos `edit <arquivo>` ou `nano <arquivo>` com interface de edição em tela cheia, navegação por cursor, atalhos de gravação (`Ctrl+S`) e saída (`Ctrl+Q`).
+  - Na GUI Mac OS System 7: Aplicativo gráfico `TextEdit.app` com barra de ferramentas interativa (`Novo`, `Abrir`, `Salvar`, `Executar`, `Limpar`), indicador de alterações não salvas (`*`), cursor de texto e buffer de edição dinâmico.
+- **Interpretador e Executor de Scripts (.txt)**:
+  - Execução de scripts em lote via CLI (`run <script.txt>`, `exec <script.txt>`) ou diretamente pelo TextEdit.
+  - Suporte a variáveis de ambiente (`set VAR=VAL`), expansão de variáveis (`$VAR`), controle de pausas (`sleep`, `pause`), impressão de mensagens (`echo`), alteração de cores (`color`) e comandos nativos do sistema.
+  - **Calculadora Aritmética Embutida (`calc` / `eval`)**: Motor de análise sintática descendente recursiva (*Recursive Descent Parser*) com suporte a operadores (`+`, `-`, `*`, `/`), parênteses aninhados e precedência matemática correta.
 - Terminal CLI em Alta Resolucao (640x480):
   - 80 colunas por 30 linhas de texto com fonte bitmap 8x16 de alta nitidez.
   - Buffer circular retroativo de 300 linhas de historico.
   - Navegacao de historico via roda do mouse ou Page Up / Page Down.
   - Cursor visual e espelhamento serial instantaneo via porta COM1 (0x3F8).
   - Decodificador e transliterador de caracteres acentuados UTF-8 para a tabela IBM CP437.
+  - Prompt inteligente com diretório de trabalho corrente (`migOS:/docs>`).
 - Interface Grafica Retro Mac OS System 7 Classic (640x480 @ 32-bit True Color):
   - Fundo pontilhado dithered 50% Gray Stipple.
   - Barra de menus superior fixa com logo do migOS, menus suspensos interativos ("migOS", "File", "Edit", "View", "Special", "Help") e relogio de uptime em tempo real.
   - Janelas amplas com estetica Platinum, barras de titulo com pinstripes horizontais, botao quadrado de fechar (Go-Away Box), sombra projetada e arraste suave com o mouse.
   - Janela de Perfil do Sistema ("System Profile" 460x340 px) com estatisticas detalhadas de hardware e memoria.
-  - Janela do Gerenciador de Arquivos ("migOS HD" 430x300 px) com listagem detalhada de arquivos do RAMDisk.
-  - Icones interativos no Desktop ("migOS HD", "Snake", "Terminal", "Trash") com suporte a selecao e duplo-clique para abrir janelas ou lancar aplicativos diretamente.
+  - Janela do Gerenciador de Arquivos ("migOS HD" 460x330 px) com suporte a navegação por pastas, barra de ferramentas (`< Voltar`, `+ Pasta`, `+ Arq`, `Mover`, `Copiar`, `Excluir`), modais com caixas de texto e duplo-clique para abrir pastas e arquivos.
+  - Janela do Editor de Texto ("TextEdit") para leitura e criação de arquivos de texto.
+  - Icones interativos no Desktop ("migOS HD", "Pokemon", "Snake", "Terminal", "Trash") com suporte a selecao e duplo-clique.
   - Sprite classico do cursor do mouse System 7 renderizado suavemente no backbuffer antes da transferencia grafica.
 - Driver de Teclado PS/2 com decodificacao de scancodes Set 1, teclas estendidas (0xE0), buffer de edicao no terminal, historico de comandos e fila assincrona circular de eventos (press/release) para aplicacoes graficas e jogos.
-- Driver de Mouse PS/2 com deteccao e ativacao de protocolo IntelliMouse (roda de scroll integrada), delimitacao de bordas de tela personalizavel (0..639 e 0..479), decodificacao de pacotes de 3 ou 4 bytes no IRQ 12 e integracao direta tanto na rolagem do terminal quanto no ambiente grafico GUI.
+- Driver de Mouse PS/2 com decodificacao padronizada de 3 bytes, extensão de sinal aritmética, prevenção de conflito com o buffer de teclado, delimitacao de bordas de tela personalizavel (0..639 e 0..479) e suporte completo a arrasto e duplo clique na GUI.
 - Biblioteca C Freestanding com implementacao completa de operacoes com memoria (`memset`, `memcpy`, `memmove`, `memcmp`), strings (`strcmp`, `strncmp`, `strcasecmp`, `strcpy`, `strncpy`, `strcat`, `strlen`, `strchr`, `strstr`, `strdup`, `strupr`), formatacao de texto (`printf`, `sprintf`, `snprintf`, `vsnprintf`, `sscanf`), utilitarios (`atoi`, `atol`, `strtol`, `itoa`, `qsort`, `rand`, `srand`) e rotinas aritmeticas para inteiros de 64 bits.
-- Shell de comandos interativo desacoplado da rotina de interrupcao, historico de comandos navegavel com setas Cima/Baixo, utilitarios de inspecao de memoria em tempo real (`meminfo`, `memtest`), tempo de atividade (`uptime`), gerenciamento de arquivos (`ls`, `cat`, `touch`, `write`, `rm`), efeito visual Matrix Code Rain e lancadores (`gui`, `desktop`, `snake`).
 - Jogo da Cobrinha (Snake Game) integrado nativamente com arena ampliada (60x24), controle de velocidade progressiva por pontuacao, frutas bonus temporizadas, persistencia de recorde e tela de Game Over.
 
 ---
@@ -85,6 +108,7 @@ MigelSO/
 ├── build.ps1                        # Script de automacao de compilacao, linkagem, imagem e emulacao
 ├── linker.ld                        # Script do GNU Linker para posicionamento do Kernel em 0x10000
 ├── nasm.exe                         # Montador NASM portatil para ambiente Windows
+├── PokemonRed.gb                    # ROM comercial de Pokémon Red Version embutida no disco ATA
 │
 ├── boot/                            # Codigo do setor de inicializacao MBR
 │   └── boot.asm                     # Bootloader em Assembly x86 16-bit Real Mode (512 bytes)
@@ -103,12 +127,19 @@ MigelSO/
 │   │   ├── ata.h                    # Interface do driver de disco rígido ATA / IDE PIO
 │   │   ├── bga.h                    # Interface do adaptador grafico Bochs/QEMU BGA (640x480 32-bit)
 │   │   ├── keyboard.h               # Interface do driver de teclado PS/2
-│   │   ├── mouse.h                  # Interface do driver de mouse PS/2 IntelliMouse
+│   │   ├── mouse.h                  # Interface do driver de mouse PS/2
 │   │   ├── vga.h                    # Interface do terminal de texto em alta resolucao (80x30 / 640x480)
 │   │   └── vga_mode13.h             # Interface legada de registradores VGA
 │   │
+│   ├── editor/                      # Cabecalho do editor de texto CLI/GUI
+│   │   └── editor.h                 # Interface publica do editor de texto em tela cheia
+│   │
+│   ├── emulator/                    # Cabecalhos do emulador de Game Boy
+│   │   ├── gameboy.h                # Interface de execucao, mapeamento e save game do Game Boy
+│   │   └── peanut_gb.h              # Core do emulador Peanut-GB (CPU LR35902, PPU, MBC1/3/5)
+│   │
 │   ├── fs/                          # Cabecalho do sistema de arquivos
-│   │   └── migfs.h                  # Estruturas de inode em memoria e funcoes do MIGFS RAMDisk
+│   │   └── migfs.h                  # Estruturas de inode, diretorios e persistencia ATA
 │   │
 │   ├── games/                       # Cabecalho de jogos
 │   │   └── snake.h                  # Interface do jogo da cobrinha (Snake Game)
@@ -116,6 +147,9 @@ MigelSO/
 │   ├── gui/                         # Cabecalhos da interface grafica
 │   │   ├── font8x8.h                # Tabela de fonte bitmap 8x8 monocromatica de 128 caracteres ASCII
 │   │   └── gui.h                    # Estruturas de janelas e primitivas de renderizacao da GUI 640x480
+│   │
+│   ├── interpreter/                 # Cabecalho do interpretador de scripts
+│   │   └── txt_interp.h             # Motor de execucao de scripts .txt e calculadora com AST
 │   │
 │   ├── kernel/                      # Cabecalhos do nucleo do sistema operacional
 │   │   ├── kheap.h                  # Interface do alocador dinamico de memoria do Kernel
@@ -155,19 +189,28 @@ MigelSO/
 │   │   ├── keyboard/
 │   │   │   └── keyboard.c           # Tratador de IRQ1, tabela de scancodes e fila de eventos
 │   │   ├── mouse/
-│   │   │   └── mouse.c              # Tratador de IRQ12, inicializacao IntelliMouse e tracking de coordenadas
+│   │   │   └── mouse.c              # Tratador de IRQ12, decodificacao de 3 bytes e tracking de coordenadas
 │   │   └── vga/
 │   │       ├── vga.c                # Renderizador de terminal em 640x480 com historico retroativo
 │   │       └── vga_mode13.c         # Manipulador direto de registradores VGA
 │   │
+│   ├── editor/                      # Editor de texto visual
+│   │   └── editor.c                 # Interface interativa de edicao em tela cheia no terminal
+│   │
+│   ├── emulator/                    # Emulador de Game Boy
+│   │   └── gameboy.c                # Loop de execucao, renderizacao BGA, controles e saves .sav
+│   │
 │   ├── fs/                          # Implementacao do sistema de arquivos
-│   │   └── migfs.c                  # Gerenciamento de arquivos em memoria RAMDisk
+│   │   └── migfs.c                  # Gerenciamento de pastas, arquivos e persistencia em disco ATA
 │   │
 │   ├── games/                       # Codigo-fonte dos jogos integrados
 │   │   └── snake.c                  # Logica, colisao, pontuacao e renderizacao do Snake Game
 │   │
 │   ├── gui/                         # Codigo-fonte do subsistema grafico Mac OS System 7
-│   │   └── gui.c                    # Gerenciador de janelas, menu bar, desktop e backbuffer 640x480
+│   │   └── gui.c                    # Gerenciador de janelas, pastas, TextEdit, Pokémon e duplo-clique
+│   │
+│   ├── interpreter/                 # Interpretador de scripts e calculadora
+│   │   └── txt_interp.c             # Executor de scripts .txt e avaliador de expressoes com parser
 │   │
 │   └── memory/                      # Gerenciamento de memoria do Kernel
 │       ├── kheap.c                  # Alocador dinamico de heap com coalescencia e divisao de blocos
@@ -179,7 +222,7 @@ MigelSO/
 │   └── string.c                     # Implementacao de memcpy, memset, memcmp, strcpy, strcmp, etc.
 │
 └── shell/                           # Interpretador de comandos
-    └── shell.c                      # Processamento de linhas de comando, utilitarios e lancadores
+    └── shell.c                      # Processamento de comandos hierarquicos, lancadores e utilitarios
 ```
 
 ---
@@ -379,14 +422,19 @@ Driver do mouse PS/2 com suporte ao protocolo IntelliMouse:
 
 ---
 
-### 7. Sistema de Arquivos (MIGFS / RAMDisk)
+### 7. Sistema de Arquivos (MIGFS / RAMDisk & Disco ATA)
 
 #### `include/fs/migfs.h` e `kernel/fs/migfs.c`
-Sistema de arquivos em memoria RAM (RAMDisk) do migOS:
-- Armazena arquivos na memoria dinamica gerenciada pelo KHeap atraves de uma tabela de descritores de arquivos `migfs_file_t`.
-- Cada entrada contem o nome do arquivo (ate 32 caracteres), tamanho em bytes, ponteiro para os dados em memoria, flags de permissao (`MIGFS_FILE_READONLY` ou leitura/escrita) e flag de ocupacao.
-- A funcao `migfs_init()` inicializa o volume em memoria e cria arquivos fundamentais do sistema (`kernel.sys`, `readme.txt`, `config.sys`, `notes.txt`, `system.log`).
-- Funcoes de manipulacao: `migfs_create`, `migfs_open`, `migfs_read`, `migfs_write`, `migfs_delete`, `migfs_exists`, `migfs_get_file_count` e `migfs_get_file_by_index`.
+Sistema de arquivos hierarquico e persistente do migOS:
+- **Estrutura de Descritores**: Gerencia uma tabela de descritores de arquivos e pastas (`migfs_file_t`). Cada entrada contem o nome/caminho do arquivo (ate 64 caracteres), tamanho em bytes, ponteiro para os dados em memoria RAM, flags de permissao e tipo (`MIGFS_FILE_READONLY`, `MIGFS_FILE_DIRECTORY`, `MIGFS_FILE_INUSE`).
+- **Suporte Hierarquico a Diretorios**:
+  - Funcoes de navegacao e manipulacao de pastas: `migfs_mkdir`, `migfs_rmdir`, `migfs_move`, `migfs_copy`, `migfs_is_dir`, `migfs_get_dir_items`, `migfs_path_combine` e resolucao inteligente de caminhos relativos e absolutos (`..`, `/`).
+  - Criacao automatica de pastas padrao do sistema (`/docs`, `/scripts`) e arquivos de demonstracao durante a montagem inicial.
+- **Persistencia Real em Disco Rigido ATA/IDE**:
+  - Implementa layout de disco seguro a partir do setor LBA 1025 (posicionado logo apos o Kernel de 512 KB).
+  - Superbloco gravado no LBA 1025 com assinatura magica `0x4D494746` (`MIGF`), contagem de arquivos e setores alocados.
+  - Gravacao de tabela de descritores e blocos de dados contiguos de 512 bytes diretamente no disco ATA em modo PIO.
+  - A funcao `migfs_sync_to_disk()` executa a sincronizacao sob demanda de todas as alteracoes feitas na sessao para a midia de disco, enquanto `migfs_load_from_disk()` restaura o estado completo no boot.
 
 ---
 
@@ -420,45 +468,36 @@ Motor de formatacao de texto completo:
 ### 9. Shell Interativo
 
 #### `include/shell/shell.h` e `shell/shell.c`
-Interpretador de comandos do sistema operacional:
-- Opera de forma totalmente desacoplada da rotina de interrupcao do teclado, processando eventos a partir de um buffer de entrada.
-- Historico de comandos com navegacao atraves das setas Cima e Baixo.
+Interpretador de comandos avancado com prompt hierarquico (`migOS:/docs>`):
+- Opera de forma desacoplada da rotina de interrupcao do teclado, processando eventos a partir de um buffer de entrada.
+- Historico de comandos navegavel com setas Cima e Baixo.
 - Conjunto de comandos integrados:
-  - `help`: Lista todos os comandos disponiveis com descricao sintetica.
-  - `clear`: Limpa a tela do terminal.
-  - `ls`: Lista todos os arquivos presentes no volume RAMDisk MIGFS com tamanho e permissoes.
-  - `cat <arquivo>`: Exibe o conteudo em texto de um arquivo do RAMDisk.
-  - `touch <arquivo>`: Cria um novo arquivo vazio no RAMDisk.
-  - `write <arquivo> <texto>`: Escreve ou concatena texto em um arquivo do RAMDisk.
-  - `rm <arquivo>`: Exclui um arquivo do RAMDisk (com protecao para arquivos somente leitura).
-  - `meminfo`: Exibe relatorio detalhado do uso de memoria fisica (PMM) e memoria dinamica (Heap).
-  - `memtest`: Executa um teste de alocacao dinamica no Heap, verificando integridade de dados e liberacao de blocos.
-  - `uptime`: Informa o tempo de atividade do sistema em segundos e ticks do PIT.
-  - `matrix`: Inicia a animacao grafica da chuva de codigos verdes do filme Matrix.
-  - `snake`: Executa o Jogo da Cobrinha em modo texto.
-  - `gui` ou `desktop`: Inicia o ambiente grafico retro Mac OS System 7 em 640x480.
-  - `version`: Exibe a versao atual do kernel.
-  - `about`: Informacoes sobre o projeto e arquitetura do sistema.
-  - `panic`: Dispara intencionalmente um Kernel Panic de teste para demonstracao do tratador de falhas.
-  - `reboot`: Reinicia imediatamente o sistema operacional.
+  - **Navegacao e Diretorios**: `cd <dir>` (troca diretorio), `pwd` (exibe diretorio atual), `mkdir <pasta>` (cria pasta), `rmdir <pasta>` (remove pasta vazia), `mv <orig> <dest>` (move/renomeia), `cp <orig> <dest>` (copia arquivo ou pasta).
+  - **Gerenciamento de Arquivos**: `ls [dir]` (listagem hierarquica com `<DIR>` e `<FILE>`), `ls -a` (visao flat global), `cat <arquivo>` (exibe texto), `touch <arquivo>` (cria arquivo), `write <arq> <txt>` (escreve texto), `rm <arquivo>` (remove arquivo), `sync` (sincroniza RAMDisk com disco ATA).
+  - **Edicao e Scripts**: `edit <arquivo>` ou `nano <arquivo>` (abre editor visual no terminal), `run <script.txt>` ou `exec <script.txt>` (executa script em lote), `calc <expressao>` (avalia expressao aritmetica).
+  - **Emulacao e Jogos**: `pokemon` (inicia Pokémon Red), `gameboy <rom.gb>` ou `gb <rom>` (emulador de Game Boy), `gbinfo <rom>` (exibe cabecalho do cartucho), `snake` (Jogo da Cobrinha), `matrix` (animacao visual).
+  - **Diagnostico do Sistema**: `meminfo` (estatisticas PMM e KHeap), `memtest` (teste de estresse do Heap), `uptime` (tempo de execucao e ticks PIT), `version` (versao do kernel), `about` (resumo arquitetural), `panic` (teste de Kernel Panic), `reboot` (reinicializacao), `clear` (limpeza de tela).
 
 ---
 
 ### 10. Interface Grafica (GUI Mac OS System 7 640x480)
 
 #### `include/gui/font8x8.h`
-Tabela de fonte bitmap monocromatica 8x8 contendo o desenho dos 128 caracteres da tabela ASCII padrao, utilizada tanto para o desenho de textos na interface grafica quanto para a renderizacao das fontes no terminal de alta resolucao.
+Tabela de fonte bitmap monocromatica 8x8 contendo o desenho dos 128 caracteres da tabela ASCII padrao com clamping de seguranca `0..127`.
 
 #### `include/gui/gui.h` e `kernel/gui/gui.c`
-Subsistema de interface grafica retro inspirada no classico **Apple Macintosh System 7 (1991)** rodando em resolucao de **640x480 pixels a 32-bit True Color**:
-- Aloca um backbuffer de 1.228.800 bytes (640x480x4) via `kmalloc` para desenho suave sem cintilacao de tela (flicker-free double buffering).
+Subsistema de interface grafica retro inspirada no classico **Apple Macintosh System 7 (1991)** rodando em **640x480 pixels a 32-bit True Color**:
+- Aloca um backbuffer de 1.228.800 bytes (640x480x4) via `kmalloc` para desenho suave sem cintilacao de tela (double buffering).
 - Renderiza o padrao de fundo classico 50% Gray Stipple dithered em cinza e branco.
-- Barra de menus superior fixa (altura de 20 pixels) contendo o logotipo do migOS, menus suspensos interativos ("migOS", "File", "Edit", "View", "Special", "Help") com sombra projetada e destaque invertido em preto/branco, e relogio de tempo de atividade em tempo real no canto superior direito.
-- Janelas com estetica Platinum, barras de titulo com pinstripes horizontais cinzas, botao quadrado de fechar (Go-Away Box), bordas duplas e sombra projetada com arraste suave via mouse:
-  - Janela 1: **System Profile** (460x340 pixels) exibindo estatisticas completas da CPU, PMM, Heap, resolucao de tela e sistema de arquivos.
-  - Janela 2: **migOS HD** (430x300 pixels) exibindo a listagem detalhada de arquivos do RAMDisk com icones, nomes, tamanhos e permissoes.
-- Icones interativos na lateral direita da area de trabalho ("migOS HD", "Snake.app", "Terminal.app", "Trash") com selecao visual e suporte a duplo-clique para abertura imediata de janelas ou lancamento de aplicacoes.
-- Cursor do mouse classico no formato de seta inclinada do System 7 desenhado diretamente sobre o backbuffer antes do blit final para o hardware.
+- Barra de menus superior fixa (altura de 20 pixels) contendo o logotipo do migOS, menus suspensos interativos ("migOS", "File", "Edit", "View", "Special", "Help") com sombra projetada e relogio de tempo de atividade em tempo real.
+- **Gerenciador de Arquivos Visual ("migOS HD" 460x330 px)**:
+  - Navegacao completa por subdiretorios com exibicao do caminho atual no titulo da janela.
+  - Barra de ferramentas interativa com botoes `< Voltar`, `+ Pasta`, `+ Arq`, `Mover`, `Copiar` e `Excluir`.
+  - Caixas de dialogo modais com caixas de texto interativas para entrada de nomes de arquivos e pastas.
+  - **Suporte a Duplo Clique**: Clique duplo em pastas navega para o subdiretorio (ou sobe com `..`), clique duplo em `.txt` abre no editor TextEdit e clique duplo em `.gb` inicia o emulador de Game Boy.
+- **Editor de Texto Grafico ("TextEdit")**: Janela com barra de ferramentas (`Novo`, `Abrir`, `Salvar`, `Executar`, `Limpar`), campo de nome do arquivo, indicador de alteracoes pendentes (`*`), cursor de texto e atalhos.
+- **Icones Interativos do Desktop**: "migOS HD", "Pokemon", "Snake.app", "Terminal.app" e "Trash" com suporte a selecao e duplo-clique.
+- Cursor do mouse classico System 7 renderizado diretamente sobre o backbuffer com rastreamento confiavel via interrupcao IRQ12.
 
 ---
 
@@ -469,9 +508,157 @@ Jogo da Cobrinha (Snake Game) integrado nativamente ao sistema operacional:
 - Renderizacao em arena ampliada de 60 colunas por 24 linhas no terminal de alta resolucao.
 - Controle da cobrinha por teclado utilizando as teclas `WASD` ou setas direcionais.
 - Aceleracao progressiva da velocidade do jogo conforme o jogador acumula pontos.
-- Sistema de frutas normais (vermelhas, 10 pontos) e frutas bonus temporizadas (douradas, 50 pontos) que desaparecem apos 80 movimentos.
-- Registro persistente de recorde de pontuacao (High Score) durante a sessao do sistema.
-- Tela de Game Over com opcao de reinicio imediato ou saida limpa para o terminal ou ambiente grafico.
+- Frutas normais (vermelhas, 10 pontos) e frutas bonus temporizadas (douradas, 50 pontos).
+- Registro de recorde de pontuacao (High Score) e tela de Game Over com retorno limpo ao shell.
+
+---
+
+### 12. Editor de Texto Visual (TextEdit & Nano/Edit)
+
+#### `include/editor/editor.h` e `kernel/editor/editor.c`
+Editor de texto interativo em tela cheia para o terminal de comandos e integrado a GUI:
+- **Modo Terminal (`edit <arquivo>` / `nano <arquivo>`)**:
+  - Interface visual com cabecalho informativo, area de edicao com numeracao de linhas e barra de atalhos inferior.
+  - Navegacao completa por setas direcionais, edicao com insercao, quebra de linha (`Enter`) e remocao (`Backspace`).
+  - Atalhos rapidos: `Ctrl+S` para salvar no disco/MIGFS e `Ctrl+Q` para sair com aviso de alteracoes nao salvas.
+- **Modo Grafico (`TextEdit.app` na GUI)**:
+  - Edicao em janela flutuante com suporte a mouse, selecao de arquivos e botao de execucao direta de scripts.
+
+---
+
+### 13. Interpretador e Executor de Scripts .txt
+
+#### `include/interpreter/txt_interp.h` e `kernel/interpreter/txt_interp.c`
+Motor de interpretacao e execucao em lote de scripts de texto:
+- Executa arquivos de script `.txt` linha por linha sem necessidade de compilacao externa.
+- **Comandos Nativos do Interpretador**:
+  - `echo <mensagem>`: Imprime mensagem no terminal ou no log da GUI.
+  - `set VAR=VALOR`: Define variavel de ambiente local.
+  - Expansao de variaveis: Substitui `$VAR` pelo seu valor em tempo de execucao.
+  - `calc <expressao>` / `eval <expressao>`: Avalia expressoes matematicas com o parser aritmetico.
+  - `sleep <ms>`: Introduz pausas temporizadas em milissegundos.
+  - `pause`: Aguarda pressionamento de tecla do usuario.
+  - `color <fg> [bg]`: Altera as cores do terminal durante a execucao.
+  - Execucao de qualquer comando interno do shell (`ls`, `touch`, `mkdir`, `cat`, `matrix`, etc.).
+- **Calculadora Aritmetica Embutida com Parser Descendente Recursivo**:
+  - Gramatica formal implementada em C com operadores de adicao (`+`), subtracao (`-`), multiplicacao (`*`), divisao (`/`) e parenteses aninhados (`()`) respeitando precedencia de operacoes.
+
+---
+
+### 14. Emulador de Game Boy & Jogo Pokémon (Peanut-GB Bare-Metal)
+
+#### `include/emulator/peanut_gb.h`, `include/emulator/gameboy.h` e `kernel/emulator/gameboy.c`
+Emulador completo de Nintendo Game Boy (DMG) portado para Ring 0 bare-metal sobre o hardware x86:
+- **Core Peanut-GB Integrado**:
+  - Emulacao precisa da CPU LR35902 (derivada do Z80), temporizacao de ciclos de clock, registradores e interrupcoes de V-Blank, LCD STAT, Timer, Serial e Joypad.
+  - Unidade de Processamento Grafico (PPU/LCD): Emulacao das 144 linhas de varredura a 160x144 pixels, com renderizacao de background tiles, window overlay e sprites de 8x8 / 8x16 com paletas clássicas monocromaticas mapeadas em 32-bit True Color.
+  - Emulacao de Memory Bank Controllers (MBC1, MBC3 com suporte a RTC e MBC5), permitindo a execucao de ROMs comerciais de ate varios megabytes.
+- **Execucao Fluida de Pokémon Red Version**:
+  - A ROM comercial `PokemonRed.gb` (1.048.576 bytes / 1 MB) e embutida no disco ATA e carregada diretamente para o espaco de memoria do kernel.
+  - Renderizacao com taxa de quadros estavel a 60 FPS com upscaling 2x centralizado na tela de 640x480 pixels com moldura de cartucho retro.
+- **Persistencia e Preservacao de Save Games (.sav)**:
+  - A memoria SRAM do cartucho (Save Game) e automaticamente monitorada e gravada no disco rigido ATA (`PokemonRed.sav`), preservando o progresso da jornada do jogador entre reinicializacoes e recompilacoes.
+- **Mapeamento de Controles do Game Boy**:
+  - **D-Pad (Cima, Baixo, Esquerda, Direita)**: Teclas `W`, `S`, `A`, `D` ou Setas Direcionais.
+  - **Botao A**: Teclas `J` ou `Z`.
+  - **Botao B**: Teclas `K` ou `X`.
+  - **START**: Tecla `Enter`.
+  - **SELECT**: Tecla `Espaço` (Spacebar).
+  - **Sair do Emulador**: Tecla `ESC` (retorna instantaneamente ao Shell ou Desktop).
+
+---
+
+## Emulador de Game Boy & Jogo Pokémon no migOS
+
+O migOS incorpora um emulador completo de **Nintendo Game Boy (DMG)** baseado no core **Peanut-GB** portado diretamente para execucao em **Ring 0 Bare-Metal**, sem intermediarios, sem sistema hospedeiro e sem bibliotecas externas:
+
+```mermaid
+flowchart TD
+    subgraph Emulador Game Boy Bare-Metal [kernel/emulator/gameboy.c]
+        A[ROM PokemonRed.gb no Disco ATA / RAM] --> B[Peanut-GB Core]
+        B --> C1[CPU LR35902 / Z80 Interpreter]
+        B --> C2[Memory Bank Controller MBC1 / MBC3 / MBC5]
+        B --> C3[PPU / LCD Scanline Renderer 160x144]
+        B --> C4[SRAM Save Game Handler]
+        
+        C3 --> D[Framebuffer 160x144 2-bit DMG Palettes]
+        D --> E[Scaler 2x & Moldura Centralizada no BGA 640x480 LFB]
+        
+        C4 --> F[Gravacao Automatica no Disco ATA LBA 1025+]
+        F --> G[Arquivo PokemonRed.sav Persistente]
+    end
+    
+    H[Teclado PS/2 IRQ1: WASD, J/Z, K/X, Enter, Space] --> C1
+```
+
+### Controles do Game Boy:
+
+| Botao Original Game Boy | Tecla no migOS (Principal) | Tecla Alternativa | Funcao no Jogo |
+| :--- | :--- | :--- | :--- |
+| **D-Pad Up (Cima)** | `W` | `Seta para Cima` | Move o personagem para cima |
+| **D-Pad Down (Baixo)** | `S` | `Seta para Baixo` | Move o personagem para baixo |
+| **D-Pad Left (Esquerda)**| `A` | `Seta para a Esquerda` | Move o personagem para a esquerda |
+| **D-Pad Right (Direita)**| `D` | `Seta para a Direita` | Move o personagem para a direita |
+| **Botao A** | `J` | `Z` | Confirmar / Interagir / Conversar |
+| **Botao B** | `K` | `X` | Cancelar / Correr / Voltar menu |
+| **START** | `Enter` | `Enter` | Abre o menu principal / Pausa |
+| **SELECT** | `Espaço` | `Espaço` | Seleciona item cadastrado / Reordena golpes |
+| **Sair / Retornar** | `ESC` | `ESC` | Salva SRAM e retorna ao Terminal/Desktop |
+
+### Persistencia de Saves de Pokémon:
+Quando o jogador salva a partida dentro de Pokémon (pelo menu *SAVE* do jogo), os dados da memória SRAM de 32 KB do cartucho são imediatamente sincronizados e persistidos no disco ATA (`PokemonRed.sav`). Ao reiniciar a máquina virtual ou recompilar o migOS, o jogo continua exatamente de onde você parou (*CONTINUE*).
+
+---
+
+## Sistema de Arquivos Hierárquico MIGFS & Persistência em Disco
+
+O **MIGFS** gerencia a hierarquia de pastas e arquivos em memória RAM com sincronização bidirecional no **Disco Rígido ATA/IDE**:
+
+```mermaid
+flowchart LR
+    subgraph Layout do Disco ATA Primario [16 MB / 32.768 Setores]
+        MBR[LBA 0: MBR Bootloader 512B]
+        Kernel[LBA 1 - 1024: Binario migOS Kernel 512KB]
+        Super[LBA 1025: Superbloco MIGFS Magic 0x4D494746]
+        Descs[LBA 1026 - 1033: Tabela de 64 Descritores de Arquivos/Pastas]
+        Data[LBA 1034+: Blocos de Dados Contiguos de Arquivos e ROMs]
+    end
+
+    MBR --> Kernel
+    Kernel --> Super
+    Super --> Descs
+    Descs --> Data
+```
+
+### Operacoes e Suporte a Pastas:
+- **CLI**: Comandos `mkdir <pasta>`, `rmdir <pasta>`, `cd <caminho>`, `pwd`, `mv <orig> <dest>`, `cp <orig> <dest>` e `ls` hierárquico com visualização de pastas (`<DIR>`) e arquivos (`<FILE>`).
+- **GUI Desktop**: Janela `migOS HD` com barra de ferramentas, criação de pastas e arquivos via caixas de diálogo modais, e **duplo clique** para navegação profunda e subida com `..`.
+- **Persistencia**: O comando `sync` (ou o botão Salvar do editor) grava instantaneamente todo o sistema de arquivos para os setores ATA correspondentes.
+
+---
+
+## Interpretador de Scripts & Calculadora Matemática
+
+O migOS inclui um interpretador em tempo de execução para scripts de lote `.txt` e avaliação de expressões aritméticas:
+
+```mermaid
+flowchart TD
+    subgraph Interpretador e Calculadora [kernel/interpreter/txt_interp.c]
+        Input["Expressao: (10 + 5) * 2 - 8 / 4"] --> Lexer[Analise Lexica / Tokens]
+        Lexer --> Parser[Parser Descendente Recursivo]
+        
+        Parser --> E[Expressao: + / -]
+        E --> T[Termo: * / /]
+        T --> F[Fator: Numeros / Variaveis $VAR / Parenteses]
+        
+        F --> Result["Resultado: 28"]
+    end
+```
+
+### Recursos de Scripting:
+- Variáveis locais com `set VAR=VAL` e interpolação `$VAR`.
+- Comandos de controle `echo`, `sleep <ms>`, `pause`, `color <cor>` e execução em lote.
+- Avaliação matemática instantânea no shell via `calc <expressao>` ou `eval <expressao>`.
 
 ---
 
@@ -495,9 +682,9 @@ flowchart TD
         J3 --> J4[timer_init: PIT 8254 100Hz e STI]
         J4 --> J5[pmm_init: Bitmap de Memoria Fisica 64MB]
         J5 --> J6[kheap_init: Heap Dinamico 8MB em 0x200000]
-        J6 --> J7[migfs_init: Montagem do RAMDisk com Arquivos Iniciais]
+        J6 --> J7[migfs_init: Montagem e Carga do Disco ATA MIGFS]
         J7 --> J8[keyboard_init: Driver de Teclado PS/2]
-        J8 --> J9[mouse_init: Driver PS/2 IntelliMouse 4-Bytes]
+        J8 --> J9[mouse_init: Driver PS/2 3-Bytes com IRQ 12]
         J9 --> J10[shell_run: Shell Interativo ou Desktop GUI]
     end
 ```
@@ -598,7 +785,7 @@ Para garantir atualizacoes visuais instantaneas sem cintilacao de tela (flicker-
 flowchart TD
     subgraph Camadas de Renderizacao da GUI
         L1[Fundo 50% Gray Stipple Dither] --> L2[Camada de Janelas: Pinstripes, Bordas e Textos]
-        L2 --> L3[Icones do Desktop: migOS HD, Snake, Terminal, Trash]
+        L2 --> L3[Icones do Desktop: migOS HD, Pokemon, Snake, Terminal, Trash]
         L3 --> L4[Barra de Menus Fixa e Menus Suspensos]
         L4 --> L5[Sprite do Cursor do Mouse 12x18]
     end
@@ -639,25 +826,38 @@ sequenceDiagram
 
 ## Comandos do Terminal
 
-| Comando | Descricao |
-| :--- | :--- |
-| `help` | Exibe a lista completa de comandos disponiveis com sintaxe |
-| `clear` | Limpa a tela do terminal e reposiciona o cursor |
-| `ls` | Lista os arquivos contidos no volume RAMDisk (MIGFS) com tamanho e flags |
-| `cat <arquivo>` | Exibe o conteudo em texto do arquivo especificado |
-| `touch <arquivo>` | Cria um novo arquivo vazio no RAMDisk |
-| `write <arq> <txt>` | Escreve uma cadeia de texto dentro de um arquivo no RAMDisk |
-| `rm <arquivo>` | Exclui um arquivo gravavel do RAMDisk |
-| `meminfo` | Exibe o diagnostico de memoria fisica (PMM) e memoria heap (KHeap) |
-| `memtest` | Executa bateria de testes de alocacao dinamica (`kmalloc` e `kfree`) |
-| `uptime` | Exibe o tempo de atividade do sistema em segundos e ticks do PIT |
-| `matrix` | Inicia o efeito visual da chuva de codigos do filme Matrix |
-| `snake` | Executa o Jogo da Cobrinha (Snake Game) |
-| `gui` ou `desktop` | Inicia o ambiente grafico Mac OS System 7 Classic em 640x480 |
-| `version` | Exibe a versao atual e arquitetura do kernel |
-| `about` | Informacoes sobre os objetivos academicos do projeto |
-| `panic` | Dispara intencionalmente um Kernel Panic para teste do tratador de excecao |
-| `reboot` | Reinicia a maquina virtual atraves do controlador PS/2 ou Triple Fault |
+| Comando | Sintaxe | Descricao |
+| :--- | :--- | :--- |
+| `help` | `help` | Exibe a lista completa de comandos disponiveis com sintaxe |
+| `clear` | `clear` | Limpa a tela do terminal e reposiciona o cursor no topo |
+| `pwd` | `pwd` | Imprime o caminho do diretorio de trabalho corrente |
+| `cd` | `cd [pasta]` | Troca de diretorio (`cd docs`, `cd ..`, `cd /`) |
+| `mkdir` | `mkdir <pasta>` | Cria um novo subdiretorio no sistema de arquivos |
+| `rmdir` | `rmdir <pasta>` | Remove um diretorio vazio |
+| `mv` | `mv <orig> <dest>` | Move ou renomeia um arquivo ou pasta |
+| `cp` | `cp <orig> <dest>` | Copia um arquivo ou pasta para um novo destino |
+| `ls` | `ls [dir] [-a]` | Lista arquivos e subdiretorios com indicacao de `<DIR>`, `<FILE>`, tamanho e flags |
+| `cat` | `cat <arquivo>` | Exibe o conteudo de texto do arquivo especificado |
+| `touch` | `touch <arquivo>` | Cria um novo arquivo vazio no diretorio |
+| `write` | `write <arq> <txt>` | Escreve ou concatena uma cadeia de texto dentro de um arquivo |
+| `rm` | `rm <arquivo>` | Exclui um arquivo gravavel do sistema de arquivos |
+| `edit` / `nano` | `edit <arquivo>` | Abre o Editor de Texto Visual em tela cheia com atalhos `Ctrl+S` e `Ctrl+Q` |
+| `run` / `exec` | `run <script.txt>` | Executa um script em lote `.txt` com variaveis e comandos |
+| `calc` / `eval` | `calc <expressao>` | Avalia uma expressao matematica com parenteses e precedencia de operadores |
+| `pokemon` | `pokemon` | Inicia imediatamente o jogo **Pokémon Red Version** no emulador Game Boy |
+| `gameboy` / `gb` | `gameboy <rom.gb>` | Executa uma ROM de Nintendo Game Boy no emulador Peanut-GB |
+| `gbinfo` | `gbinfo <rom.gb>` | Exibe o cabecalho tecnico e metadados de um cartucho Game Boy |
+| `sync` | `sync` | Sincroniza e grava todas as alteracoes do sistema de arquivos no disco rigido ATA |
+| `meminfo` | `meminfo` | Exibe o diagnostico de memoria fisica (PMM) e memoria heap (KHeap) |
+| `memtest` | `memtest` | Executa bateria de testes de alocacao dinamica (`kmalloc` e `kfree`) |
+| `uptime` | `uptime` | Exibe o tempo de atividade do sistema em segundos e ticks do PIT |
+| `matrix` | `matrix` | Inicia o efeito visual da chuva de codigos verdes do filme Matrix |
+| `snake` | `snake` | Executa o Jogo da Cobrinha (Snake Game) integrado |
+| `gui` / `desktop`| `gui` | Inicia a Interface Grafica Mac OS System 7 Classic em 640x480 |
+| `version` | `version` | Exibe a versao atual e arquitetura do kernel |
+| `about` | `about` | Informacoes sobre os objetivos academicos do projeto migOS |
+| `panic` | `panic` | Dispara intencionalmente um Kernel Panic de teste (Divisao por Zero / INT 0) |
+| `reboot` | `reboot` | Reinicia a maquina virtual atraves do controlador PS/2 ou Triple Fault |
 
 ---
 

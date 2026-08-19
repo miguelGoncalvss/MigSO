@@ -97,6 +97,7 @@ $GccFlags = @(
     "-fno-pie",
     "-fno-stack-protector",
     "-fno-asynchronous-unwind-tables",
+    "-funsigned-char",
     "-mno-stack-arg-probe",
     "-m80387",
     "-mfpmath=387",
@@ -298,9 +299,28 @@ calc `$PI * `$RAIO * `$RAIO
 echo Area calculada!
 "@
 
+$DefaultManual = @"
+Manual migOS:
+- Comandos CLI: ls, cd, pwd, mkdir, rmdir, mv, cp, rm, touch, write, cat, edit, run
+- GUI Desktop: Duplo clique para abrir pastas/arquivos, use botoes para criar pastas, mover, copiar e excluir!
+"@
+
+$DefaultScript = @"
+# Script em Subpasta
+echo ====================================
+echo   Executando Script em /scripts!    
+echo ====================================
+calc 15 * 6
+echo [OK] Script concluido!
+"@
+
 $FilesToPack += @{ Name = "readme.txt"; Bytes = [System.Text.Encoding]::ASCII.GetBytes($DefaultReadme); Flags = 1 }
 $FilesToPack += @{ Name = "demo.txt";   Bytes = [System.Text.Encoding]::ASCII.GetBytes($DefaultDemo);   Flags = 0 }
 $FilesToPack += @{ Name = "calc.txt";   Bytes = [System.Text.Encoding]::ASCII.GetBytes($DefaultCalc);   Flags = 0 }
+$FilesToPack += @{ Name = "docs";       Bytes = [byte[]]::new(0);                                      Flags = 4 }
+$FilesToPack += @{ Name = "docs/manual.txt"; Bytes = [System.Text.Encoding]::ASCII.GetBytes($DefaultManual); Flags = 0 }
+$FilesToPack += @{ Name = "scripts";    Bytes = [byte[]]::new(0);                                      Flags = 4 }
+$FilesToPack += @{ Name = "scripts/teste.txt"; Bytes = [System.Text.Encoding]::ASCII.GetBytes($DefaultScript); Flags = 0 }
 
 # Se existir PokemonRed.gb na raiz, inclui no disco persistente!
 $RomPath = "$PSScriptRoot\PokemonRed.gb"
