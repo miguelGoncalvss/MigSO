@@ -46,5 +46,7 @@ void gui_draw_string(int x, int y, const char* str, uint32_t fg);
 void gui_draw_string_clipped(int x, int y, const char* str, uint32_t fg, int max_x);
 void gui_draw_string_win(gui_window_t* win, int rel_x, int rel_y, const char* str, uint32_t fg);
 void gui_draw_window(gui_window_t* win);
+void gui_draw_button(int x, int y, int w, int h, const char* text, int is_pressed);
+void gui_draw_inset_frame(int x, int y, int w, int h);
 
 #endif // GUI_H

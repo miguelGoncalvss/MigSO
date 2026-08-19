@@ -36,4 +36,7 @@ int ata_write_sectors(uint32_t lba, uint32_t count, const void* buffer);
 // Retorna se o drive de disco ATA esta disponivel
 int ata_is_available(void);
 
+// Forca a gravacao do cache do disco
+int ata_flush(void);
+
 #endif // DRIVERS_ATA_H
