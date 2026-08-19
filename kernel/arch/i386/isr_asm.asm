@@ -4,6 +4,7 @@ section .text
 extern _isr_handler_c
 extern _keyboard_handler_c
 extern _timer_handler_c
+extern _mouse_handler_c
 
 %macro ISR_NOERRCODE 1
 global _isr%1
@@ -143,3 +144,34 @@ keyboard_isr_wrapper:
 
     popa
     iret
+
+; ============================================================
+; ISR do Mouse PS/2 (IRQ 12 / Vetor 44)
+; ============================================================
+global _mouse_isr_wrapper
+global mouse_isr_wrapper
+
+_mouse_isr_wrapper:
+mouse_isr_wrapper:
+    pusha
+
+    mov ax, ds
+    push eax
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    call _mouse_handler_c
+
+    pop eax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    popa
+    iret
+

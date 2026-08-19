@@ -6,7 +6,7 @@
 
 #define KHEAP_MAGIC             0x1A2B3C4D
 #define KHEAP_START_ADDRESS     0x00200000              // Endereco inicial do Heap (2 MB)
-#define KHEAP_INITIAL_SIZE      (1 * 1024 * 1024)       // Tamanho inicial do Heap (1 MB)
+#define KHEAP_INITIAL_SIZE      (8 * 1024 * 1024)       // Tamanho inicial do Heap (8 MB)
 #define KHEAP_ALIGNMENT         8                       // Alinhamento obrigatorio de 8 bytes
 
 // Estrutura de cabecalho de cada bloco do Heap

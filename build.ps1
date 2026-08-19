@@ -92,29 +92,43 @@ Write-Host "[3/7] Compilando modulos C do Kernel, Drivers, LibC e Shell..." -For
 
 $GccFlags = @(
     "-m32",
+    "-std=gnu99",
     "-ffreestanding",
     "-fno-pie",
     "-fno-stack-protector",
     "-fno-asynchronous-unwind-tables",
     "-mno-stack-arg-probe",
-    "-mgeneral-regs-only",
+    "-m80387",
+    "-mfpmath=387",
     "-mno-sse",
     "-mno-sse2",
-    "-mno-mmx",
-    "-mno-80387",
-    "-Wall",
-    "-Wextra",
     "-O2",
+    "-Wall",
+    "-Wno-unused-parameter",
+    "-Wno-unused-variable",
+    "-Wno-unused-but-set-variable",
+    "-Wno-dangling-pointer",
+    "-Wno-missing-field-initializers",
+    "-Wno-sign-compare",
+    "-Wno-unused-function",
+    "-Wno-implicit-function-declaration",
+    "-Wno-int-conversion",
+    "-DCMAP256",
+    "-DDOOMGENERIC_RESX=320",
+    "-DDOOMGENERIC_RESY=200",
+    "-DNORMALUNIX",
     "-I$PSScriptRoot\include",
     "-I$PSScriptRoot\include\kernel",
     "-I$PSScriptRoot\include\arch\i386",
     "-I$PSScriptRoot\include\drivers",
     "-I$PSScriptRoot\include\fs",
     "-I$PSScriptRoot\include\libc",
-    "-I$PSScriptRoot\include\shell"
+    "-I$PSScriptRoot\include\shell",
+    "-I$PSScriptRoot\include\gui",
+    "-I$PSScriptRoot\include\games"
 )
 
-$C_Sources = @(
+$Core_Sources = @(
     @{ Src = "kernel\kernel.c";                 Obj = "$BuildDir\kernel.o" },
     @{ Src = "kernel\arch\i386\idt.c";          Obj = "$BuildDir\idt.o" },
     @{ Src = "kernel\arch\i386\isr.c";          Obj = "$BuildDir\isr.o" },
@@ -123,14 +137,21 @@ $C_Sources = @(
     @{ Src = "kernel\memory\pmm.c";             Obj = "$BuildDir\pmm.o" },
     @{ Src = "kernel\memory\kheap.c";           Obj = "$BuildDir\kheap.o" },
     @{ Src = "kernel\fs\migfs.c";               Obj = "$BuildDir\migfs.o" },
+    @{ Src = "kernel\drivers\bga\bga.c";        Obj = "$BuildDir\bga.o" },
     @{ Src = "kernel\drivers\vga\vga.c";        Obj = "$BuildDir\vga.o" },
+    @{ Src = "kernel\drivers\vga\vga_mode13.c"; Obj = "$BuildDir\vga_mode13.o" },
+    @{ Src = "kernel\drivers\disk\ata.c";       Obj = "$BuildDir\ata.o" },
     @{ Src = "kernel\drivers\keyboard\keyboard.c"; Obj = "$BuildDir\keyboard.o" },
+    @{ Src = "kernel\drivers\mouse\mouse.c";       Obj = "$BuildDir\mouse.o" },
+    @{ Src = "kernel\gui\gui.c";                   Obj = "$BuildDir\gui.o" },
+    @{ Src = "kernel\games\snake.c";               Obj = "$BuildDir\snake.o" },
     @{ Src = "libc\string.c";                   Obj = "$BuildDir\string.o" },
     @{ Src = "libc\stdlib.c";                   Obj = "$BuildDir\stdlib.o" },
+    @{ Src = "libc\stdio.c";                    Obj = "$BuildDir\stdio.o" },
     @{ Src = "shell\shell.c";                   Obj = "$BuildDir\shell.o" }
 )
 
-foreach ($item in $C_Sources) {
+foreach ($item in $Core_Sources) {
     & gcc @GccFlags -c $item.Src -o $item.Obj
     if ($LASTEXITCODE -ne 0) { throw "Erro ao compilar $($item.Src)" }
 }
@@ -138,7 +159,7 @@ foreach ($item in $C_Sources) {
 # ============================================================
 # 5. Linkagem do Kernel
 # ============================================================
-Write-Host "[4/7] Linkando modulos do Kernel..." -ForegroundColor Yellow
+Write-Host "[4/7] Linkando modulos do Kernel e GUI..." -ForegroundColor Yellow
 
 # ATENCAO: kernel_entry.o DEVE ser o primeiro objeto para posicionar _start em 0x10000
 $LinkObjects = @(
@@ -152,10 +173,17 @@ $LinkObjects = @(
     "$BuildDir\pmm.o",
     "$BuildDir\kheap.o",
     "$BuildDir\migfs.o",
+    "$BuildDir\bga.o",
     "$BuildDir\vga.o",
+    "$BuildDir\vga_mode13.o",
+    "$BuildDir\ata.o",
     "$BuildDir\keyboard.o",
+    "$BuildDir\mouse.o",
+    "$BuildDir\gui.o",
+    "$BuildDir\snake.o",
     "$BuildDir\string.o",
     "$BuildDir\stdlib.o",
+    "$BuildDir\stdio.o",
     "$BuildDir\shell.o"
 )
 
@@ -170,11 +198,10 @@ if ($LASTEXITCODE -ne 0) { throw "Erro ao extrair imagem binaria do Kernel (objc
 # ============================================================
 Write-Host "[5/7] Gerando imagem de disco (migOS.img)..." -ForegroundColor Yellow
 
-# O bootloader carrega 64 setores (64 * 512 = 32768 bytes = 32KB)
+# O bootloader suporta carregar ate 1024 setores (1024 * 512 = 524288 bytes = 512KB)
 $SectorSize = 512
-$TargetSectors = 64
+$TargetSectors = 1024
 $TargetKernelSize = $TargetSectors * $SectorSize
-
 
 $RawKernelData = [System.IO.File]::ReadAllBytes("$BuildDir\kernel.bin")
 $CurrentKernelSize = $RawKernelData.Length
@@ -237,7 +264,7 @@ if (-not $QemuExec) {
 }
 
 if ($QemuExec) {
-    & $QemuExec -drive format=raw,file="$PSScriptRoot\migOS.img"
+    & $QemuExec -m 64M -vga std -drive format=raw,file="$PSScriptRoot\migOS.img" -rtc base=localtime
 } else {
     Write-Warning "[AVISO] Executavel do QEMU nao encontrado nos caminhos padrao. Imagem 'migOS.img' gerada e pronta para execucao."
 }

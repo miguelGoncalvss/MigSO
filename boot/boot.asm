@@ -1,14 +1,13 @@
 ; ============================================================
-; migOS - Bootloader Definitivo (512 bytes)
+; migOS - Bootloader Definitivo com Leitura LBA em Chunks
 ; ============================================================
 
 BITS 16
 ORG 0x7C00
 
-KERNEL_LOAD_SEGMENT equ 0x1000
-KERNEL_LOAD_OFFSET  equ 0x0000
-SECTORS_TO_LOAD     equ 64
-
+KERNEL_START_SEGMENT equ 0x1000
+CHUNK_SECTORS        equ 64      ; 64 setores = 32 KB por chamada (seguro para todas as BIOS)
+TOTAL_CHUNKS         equ 16      ; 16 * 64 = 1024 setores = 512 KB
 
 start:
     cli
@@ -26,9 +25,9 @@ start:
     call print_string
 
     ; Carrega o Kernel do disco para 0x1000:0x0000 (0x10000 linear)
-    call disk_load
+    call disk_load_chunks
 
-    ; Desabilita interrupções da BIOS antes de mudar de modo
+    ; Desabilita interrupções da BIOS antes de mudar para Protected Mode
     cli
     xor ax, ax
     mov ds, ax
@@ -42,23 +41,43 @@ start:
     jmp 0x08:protected_mode_start
 
 ; ============================================================
-; ROTINAS 16-BIT
+; ROTINAS 16-BIT DE LEITURA DE DISCO EM CHUNKS (LBA)
 ; ============================================================
 
-disk_load:
-    mov ax, KERNEL_LOAD_SEGMENT
-    mov es, ax
-    mov bx, KERNEL_LOAD_OFFSET
-
-    mov ah, 0x02
-    mov al, SECTORS_TO_LOAD
-    mov ch, 0
-    mov cl, 2
-    mov dh, 0
+disk_load_chunks:
+    ; Verifica se extenções LBA (INT 13h, AH=0x41) estão disponíveis
+    mov ah, 0x41
+    mov bx, 0x55AA
     mov dl, [boot_drive]
-
     int 0x13
     jc disk_error
+    cmp bx, 0xAA55
+    jne disk_error
+
+    mov cx, TOTAL_CHUNKS
+
+.chunk_loop:
+    push cx
+
+    mov si, dap
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    int 0x13
+    jc disk_error
+
+    ; Imprime um ponto '.' para cada bloco carregado (progresso visual)
+    mov al, '.'
+    mov ah, 0x0E
+    int 0x10
+
+    ; Atualiza o DAP para o proximo bloco de 64 setores (32 KB)
+    add word [dap_lba_lo], CHUNK_SECTORS
+    adc word [dap_lba_hi], 0
+    add word [dap_segment], (CHUNK_SECTORS * 512) / 16  ; += 0x0800
+
+    pop cx
+    loop .chunk_loop
+
     ret
 
 disk_error:
@@ -83,12 +102,26 @@ print_string:
     ret
 
 ; ============================================================
-; DADOS & GDT
+; DADOS, DAP & GDT
 ; ============================================================
 
-boot_message:       db 13, 10, "migOS: Carregando Kernel...", 13, 10, 0
-disk_error_message: db 13, 10, "Erro ao ler Kernel do disco!", 13, 10, 0
+boot_message:       db 13, 10, "migOS: Carregando", 0
+disk_error_message: db 13, 10, "Erro ao ler disco!", 13, 10, 0
 boot_drive:         db 0
+
+align 4
+dap:
+    db 0x10                 ; Tamanho do pacote DAP (16 bytes)
+    db 0                    ; Reservado (0)
+    dw CHUNK_SECTORS        ; 64 setores por leitura (32 KB)
+    dw 0x0000               ; Offset no segmento
+dap_segment:
+    dw KERNEL_START_SEGMENT ; Inicia em 0x1000
+dap_lba_lo:
+    dw 1                    ; LBA inicial = 1
+dap_lba_hi:
+    dw 0
+    dd 0                    ; LBA 64-bit high dword
 
 gdt_start:
 gdt_null:

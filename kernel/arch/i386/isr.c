@@ -1,7 +1,11 @@
 #include <arch/i386/isr.h>
 #include <arch/i386/idt.h>
 #include <arch/i386/io.h>
+#include <arch/i386/pic.h>
+#include <arch/i386/timer.h>
+#include <arch/i386/reboot.h>
 #include <drivers/vga.h>
+#include <libc/stdlib.h>
 
 static const char* exception_messages[32] = {
     "Division By Zero Exception",
@@ -107,6 +111,9 @@ void isr_init(void) {
 void isr_handler_c(registers_t* regs) {
     __asm__ volatile ("cli");
 
+    // Desativa interrupcao do teclado para evitar interferencia visual na tela azul
+    pic_mask_irq(1);
+
     vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLUE);
     vga_clear();
 
@@ -139,10 +146,36 @@ void isr_handler_c(registers_t* regs) {
     vga_puts("  ESI:    "); print_hex(regs->esi);
     vga_puts("  EDI: "); print_hex(regs->edi);
 
-    vga_puts("\n\n O kernel foi congelado para proteger o sistema.\n");
-    vga_puts(" Reinicie a maquina virtual.\n");
+    vga_puts("\n\n");
+    vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLUE);
+    vga_puts(" ----------------------------------------------------------------------------\n");
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLUE);
+    vga_puts(" \"Você tomou a pílula vermelha e viu até onde vai a toca do coelho.\n");
+    vga_puts("  Infelizmente, a CPU ultrapassou o limite do espaço físico.\"\n");
+    vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLUE);
+    vga_puts(" ----------------------------------------------------------------------------\n\n");
 
-    while (1) {
-        __asm__ volatile ("cli; hlt");
+    // Habilita interrupcoes para que o PIT Timer funcione na contagem regressiva
+    __asm__ volatile ("sti");
+
+    char num_buf[16];
+    for (int sec = 30; sec >= 0; sec--) {
+        vga_set_cursor(18, 0);
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLUE);
+        vga_puts(" Contagem: Desconectando da simulação em ");
+        itoa(sec, num_buf, 10);
+        vga_puts(num_buf);
+        vga_puts(" segundos...   \n");
+
+        if (sec > 0) {
+            sleep(1000);
+        }
     }
+
+    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLUE);
+    vga_set_cursor(20, 0);
+    vga_puts(" Reiniciando o sistema...\n");
+    sleep(300);
+
+    reboot_system();
 }

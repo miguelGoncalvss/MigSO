@@ -8,6 +8,8 @@
 #include <arch/i386/pic.h>
 #include <arch/i386/timer.h>
 #include <drivers/keyboard.h>
+#include <drivers/mouse.h>
+#include <drivers/ata.h>
 #include <shell/shell.h>
 
 void kernel_main(void)
@@ -28,6 +30,8 @@ void kernel_main(void)
     pic_remap();
     timer_init(100);    // Inicializa o PIT em 100 Hz (1 tick = 10ms)
     keyboard_init();
+    mouse_init();       // Inicializa Mouse PS/2 com suporte a Scroll Wheel
+    ata_init();         // Inicializa o disco ATA/IDE primario (PIO Mode)
 
     // Inicializa os gerenciadores de memoria física (PMM) e dinamica (KHeap)
     pmm_init(PMM_DEFAULT_RAM_SIZE);
@@ -36,9 +40,9 @@ void kernel_main(void)
     // Monta o sistema de arquivos RAMDisk (MIGFS) e carrega arquivos embutidos
     migfs_init();
 
-    vga_puts("[OK] IDT, ISRs (0-31), PIC, PIT (100Hz) e Teclado ativos.\n");
-    vga_puts("[OK] PMM (Frames 4KB) e KHeap (kmalloc) inicializados.\n");
-    vga_puts("[OK] RAMDisk / MIGFS carregado com arquivos embutidos.\n");
+    vga_puts("[OK] IDT, ISRs (0-31), PIC, PIT (100Hz), Teclado, Mouse PS/2 e Disco ATA ativos.\n");
+    vga_puts("[OK] PMM (Frames 4KB), KHeap (8MB), RAMDisk / MIGFS e Jogos prontos.\n");
+    vga_puts("[OK] RAMDisk / MIGFS e Subssistema DOOM Bare-Metal prontos.\n");
     vga_puts("[OK] Shell interativo carregado.\n");
     vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
     vga_puts("========================================\n\n");
