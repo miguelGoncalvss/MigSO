@@ -46,7 +46,9 @@ static void draw_text_cell(int col, int row, unsigned char ch, unsigned char col
     uint32_t fg = vga_colors_32[color_attr & 0x0F];
     uint32_t bg = vga_colors_32[(color_attr >> 4) & 0x0F];
 
-    const uint8_t* glyph = font8x8_basic[(unsigned char)(ch > 127 ? ' ' : ch)];
+    unsigned char uc = (unsigned char)ch;
+    if (uc > 127) uc = ' ';
+    const uint8_t* glyph = font8x8_basic[uc];
     int start_x = col * 8;
     int start_y = row * 16;
 

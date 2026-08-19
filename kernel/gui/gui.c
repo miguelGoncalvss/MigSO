@@ -61,6 +61,28 @@ static const uint8_t icon_hd_24x18[18][24] = {
     {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
 };
 
+// Icone Pasta / Folder 24x18 (Estilo Mac OS System 7 Classic)
+static const uint8_t icon_folder_24x18[18][24] = {
+    {0,0,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,1,2,2,2,2,2,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1,0},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,2,1},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {1,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,1},
+    {0,1,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,1,0},
+    {0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}
+};
+
 // Icone TextEdit / Documento 24x18
 static const uint8_t icon_edit_24x18[18][24] = {
     {0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,0,0,0,0},
@@ -262,8 +284,9 @@ void gui_draw_button(int x, int y, int w, int h, const char* text, int is_presse
 }
 
 void gui_draw_char(int x, int y, char c, uint32_t fg) {
-    if ((unsigned char)c > 127) return;
-    const uint8_t* glyph = font8x8_basic[(unsigned char)c];
+    unsigned char uc = (unsigned char)c;
+    if (uc > 127) uc = ' ';
+    const uint8_t* glyph = font8x8_basic[uc];
     for (int cy = 0; cy < 8; cy++) {
         int py = y + (cy * 2);
         uint8_t row = glyph[cy];
@@ -278,8 +301,9 @@ void gui_draw_char(int x, int y, char c, uint32_t fg) {
 }
 
 void gui_draw_char_clipped(int x, int y, char c, uint32_t fg, int min_x, int max_x, int min_y, int max_y) {
-    if ((unsigned char)c > 127) return;
-    const uint8_t* glyph = font8x8_basic[(unsigned char)c];
+    unsigned char uc = (unsigned char)c;
+    if (uc > 127) uc = ' ';
+    const uint8_t* glyph = font8x8_basic[uc];
     for (int cy = 0; cy < 8; cy++) {
         int py1 = y + (cy * 2);
         int py2 = py1 + 1;
@@ -334,6 +358,18 @@ static void draw_desktop_background(void) {
 
 static void draw_icon_24x18(int x, int y, const uint8_t icon[18][24]) {
     uint32_t pal[5] = {0, GUI_COLOR_BLACK, GUI_COLOR_WHITE, GUI_COLOR_MID_GRAY, GUI_COLOR_DARK_GRAY};
+    for (int j = 0; j < 18; j++) {
+        for (int i = 0; i < 24; i++) {
+            uint8_t px = icon[j][i];
+            if (px > 0 && px < 5) {
+                gui_draw_pixel(x + i, y + j, pal[px]);
+            }
+        }
+    }
+}
+
+static void draw_icon_folder_24x18(int x, int y, const uint8_t icon[18][24]) {
+    uint32_t pal[5] = {0, GUI_COLOR_BLACK, 0x00FFCC00, 0x00CC9900, GUI_COLOR_DARK_GRAY};
     for (int j = 0; j < 18; j++) {
         for (int i = 0; i < 24; i++) {
             uint8_t px = icon[j][i];
@@ -590,31 +626,177 @@ static void render_win_about(gui_window_t* win) {
     gui_draw_string_win(win, 14, 256, "Pressione [ESC] para retornar ao Terminal CLI", GUI_COLOR_DARK_GRAY);
 }
 
-static void render_win_files(gui_window_t* win) {
-    if (!win->is_open) return;
-    gui_draw_window(win);
+// ============================================================
+// Estado do Gerenciador de Arquivos GUI (migOS HD / Finder)
+// ============================================================
+#define DIALOG_NONE      0
+#define DIALOG_MKDIR     1
+#define DIALOG_MOVE      2
+#define DIALOG_COPY      3
+#define DIALOG_DELETE    4
+#define DIALOG_NEW_FILE  5
 
-    gui_draw_string_win(win, 12, 28, "Arquivos no Disco ATA Persistente (MIGFS):", GUI_COLOR_DARK_GRAY);
-    gui_draw_line_h(win->x + 12, win->y + 48, win->w - 24, GUI_COLOR_LIGHT_GRAY);
+static int dialog_open = 0;
+static int dialog_type = DIALOG_NONE;
+static char dialog_title[48] = "";
+static char dialog_prompt[64] = "";
+static char dialog_input[MIGFS_MAX_FILENAME] = "";
+static int dialog_input_pos = 0;
+static char dialog_target_item[MIGFS_MAX_FILENAME] = "";
 
-    size_t fcount = migfs_get_file_count();
-    int file_rel_y = 56;
-    for (size_t i = 0; i < fcount && i < 10; i++) {
-        migfs_file_t* f = migfs_get_file_by_index(i);
-        if (f) {
-            draw_icon_24x18(win->x + 14, win->y + file_rel_y, icon_edit_24x18);
-            gui_draw_string_win(win, 44, file_rel_y + 2, f->name, GUI_COLOR_BLACK);
+static char gui_files_cwd[MIGFS_MAX_FILENAME] = "/";
+static int gui_files_selected = -1;
+static char gui_files_title[64] = "migOS HD - /";
 
-            char sz_str[32];
-            sprintf(sz_str, "%u B", (unsigned int)f->size);
-            gui_draw_string_win(win, 220, file_rel_y + 2, sz_str, GUI_COLOR_DARK_GRAY);
+static void execute_dialog_action(void) {
+    if (!dialog_open) return;
 
-            const char* attr_str = (f->flags & MIGFS_FILE_READONLY) ? "[RO]" : "[RW]";
-            gui_draw_string_win(win, 320, file_rel_y + 2, attr_str, GUI_COLOR_DARK_GRAY);
-
-            file_rel_y += 24;
+    if (dialog_type == DIALOG_MKDIR) {
+        if (dialog_input[0] != '\0') {
+            char full_p[MIGFS_MAX_FILENAME];
+            migfs_path_combine(gui_files_cwd, dialog_input, full_p, sizeof(full_p));
+            migfs_mkdir(full_p);
+        }
+    } else if (dialog_type == DIALOG_NEW_FILE) {
+        if (dialog_input[0] != '\0') {
+            char full_p[MIGFS_MAX_FILENAME];
+            migfs_path_combine(gui_files_cwd, dialog_input, full_p, sizeof(full_p));
+            migfs_create(full_p, "", 0, 0);
+            gui_load_file_to_editor(full_p);
+        }
+    } else if (dialog_type == DIALOG_MOVE) {
+        if (dialog_input[0] != '\0' && dialog_target_item[0] != '\0') {
+            char full_p[MIGFS_MAX_FILENAME];
+            migfs_path_combine(gui_files_cwd, dialog_input, full_p, sizeof(full_p));
+            migfs_move(dialog_target_item, full_p);
+        }
+    } else if (dialog_type == DIALOG_COPY) {
+        if (dialog_input[0] != '\0' && dialog_target_item[0] != '\0') {
+            char full_p[MIGFS_MAX_FILENAME];
+            migfs_path_combine(gui_files_cwd, dialog_input, full_p, sizeof(full_p));
+            migfs_copy(dialog_target_item, full_p);
+        }
+    } else if (dialog_type == DIALOG_DELETE) {
+        if (dialog_target_item[0] != '\0') {
+            if (migfs_is_dir(dialog_target_item)) {
+                migfs_rmdir(dialog_target_item);
+            } else {
+                migfs_delete(dialog_target_item);
+            }
         }
     }
+
+    dialog_open = 0;
+    dialog_type = DIALOG_NONE;
+    gui_files_selected = -1;
+}
+
+static void render_dialog_modal(void) {
+    if (!dialog_open) return;
+
+    int dx = 150, dy = 140, dw = 340, dh = 155;
+
+    // Sombra do modal (4px)
+    gui_draw_rect_fill(dx + 4, dy + 4, dw, dh, GUI_COLOR_BLACK);
+
+    // Corpo
+    gui_draw_rect_fill(dx, dy, dw, dh, GUI_COLOR_WHITE);
+    gui_draw_rect(dx, dy, dw, dh, GUI_COLOR_BLACK);
+    gui_draw_rect(dx + 2, dy + 2, dw - 4, dh - 4, GUI_COLOR_BLACK);
+
+    // Barra de Titulo
+    gui_draw_rect_fill(dx + 3, dy + 3, dw - 6, 20, GUI_COLOR_TITLE_BLUE);
+    gui_draw_string(dx + 12, dy + 5, dialog_title, GUI_COLOR_WHITE);
+
+    // Prompt
+    gui_draw_string(dx + 16, dy + 35, dialog_prompt, GUI_COLOR_BLACK);
+
+    if (dialog_type == DIALOG_DELETE) {
+        gui_draw_string(dx + 16, dy + 60, "Esta acao removera o item permanentemente.", GUI_COLOR_LIGHT_RED);
+        gui_draw_button(dx + dw - 185, dy + dh - 34, 80, 22, "Excluir", 0);
+        gui_draw_button(dx + dw - 95, dy + dh - 34, 75, 22, "Cancelar", 0);
+    } else {
+        gui_draw_inset_frame(dx + 16, dy + 60, dw - 32, 26);
+        gui_draw_string_clipped(dx + 22, dy + 66, dialog_input, GUI_COLOR_BLACK, dx + dw - 24);
+
+        int cur_x = dx + 22 + (dialog_input_pos * 8);
+        if (cur_x < dx + dw - 24) {
+            gui_draw_line_v(cur_x, dy + 64, 16, GUI_COLOR_BLACK);
+            gui_draw_line_v(cur_x + 1, dy + 64, 16, GUI_COLOR_BLACK);
+        }
+
+        gui_draw_button(dx + dw - 185, dy + dh - 34, 80, 22, "Confirmar", 0);
+        gui_draw_button(dx + dw - 95, dy + dh - 34, 75, 22, "Cancelar", 0);
+    }
+}
+
+static void render_win_files(gui_window_t* win) {
+    if (!win->is_open) return;
+
+    snprintf(gui_files_title, sizeof(gui_files_title), "migOS HD - %s", gui_files_cwd);
+    win->title = gui_files_title;
+    gui_draw_window(win);
+
+    // Toolbar de botoes do Gerenciador de Arquivos
+    gui_draw_button(win->x + 10, win->y + 24, 60, 18, "< Voltar", 0);
+    gui_draw_button(win->x + 74, win->y + 24, 62, 18, "+ Pasta", 0);
+    gui_draw_button(win->x + 140, win->y + 24, 52, 18, "+ Arq", 0);
+    gui_draw_button(win->x + 196, win->y + 24, 50, 18, "Mover", 0);
+    gui_draw_button(win->x + 250, win->y + 24, 54, 18, "Copiar", 0);
+    gui_draw_button(win->x + 308, win->y + 24, 58, 18, "Excluir", 0);
+
+    // Exibe Pasta Atual
+    char cur_path_str[64];
+    snprintf(cur_path_str, sizeof(cur_path_str), "Pasta: %s", gui_files_cwd);
+    gui_draw_string_win(win, 12, 46, cur_path_str, GUI_COLOR_DARK_GRAY);
+
+    // Frame da lista de arquivos e pastas
+    int list_x = win->x + 10;
+    int list_y = win->y + 60;
+    int list_w = win->w - 20;
+    int list_h = win->h - 88;
+    gui_draw_inset_frame(list_x, list_y, list_w, list_h);
+
+    static migfs_dir_item_t items[32];
+    size_t count = 0;
+    migfs_get_dir_items(gui_files_cwd, items, 32, &count);
+
+    int max_vis = list_h / 24;
+    for (size_t i = 0; i < count && i < (size_t)max_vis; i++) {
+        int item_y = list_y + 4 + ((int)i * 24);
+
+        if (gui_files_selected == (int)i) {
+            gui_draw_rect_fill(list_x + 2, item_y - 2, list_w - 4, 22, GUI_COLOR_TITLE_BLUE);
+        }
+
+        uint32_t text_color = (gui_files_selected == (int)i) ? GUI_COLOR_WHITE : GUI_COLOR_BLACK;
+        uint32_t meta_color = (gui_files_selected == (int)i) ? GUI_COLOR_WHITE : GUI_COLOR_DARK_GRAY;
+
+        if (items[i].is_dir) {
+            draw_icon_folder_24x18(list_x + 6, item_y, icon_folder_24x18);
+            gui_draw_string_clipped(list_x + 36, item_y + 2, items[i].name, text_color, list_x + 220);
+            gui_draw_string_clipped(list_x + 240, item_y + 2, "<PASTA>", meta_color, list_x + 330);
+        } else if (strstr(items[i].name, ".gb")) {
+            draw_icon_24x18(list_x + 6, item_y, icon_pokemon_24x18);
+            gui_draw_string_clipped(list_x + 36, item_y + 2, items[i].name, text_color, list_x + 220);
+            char sz_str[32];
+            sprintf(sz_str, "%u B", (unsigned int)items[i].size);
+            gui_draw_string_clipped(list_x + 240, item_y + 2, sz_str, meta_color, list_x + 330);
+        } else {
+            draw_icon_24x18(list_x + 6, item_y, icon_edit_24x18);
+            gui_draw_string_clipped(list_x + 36, item_y + 2, items[i].name, text_color, list_x + 220);
+            char sz_str[32];
+            sprintf(sz_str, "%u B", (unsigned int)items[i].size);
+            gui_draw_string_clipped(list_x + 240, item_y + 2, sz_str, meta_color, list_x + 330);
+        }
+
+        const char* attr = (items[i].flags & MIGFS_FILE_READONLY) ? "[RO]" : "[RW]";
+        gui_draw_string_clipped(list_x + 350, item_y + 2, attr, meta_color, list_x + list_w - 6);
+    }
+
+    char footer_str[80];
+    sprintf(footer_str, "%d item(ns) na pasta | Duplo clique para abrir", (int)count);
+    gui_draw_string_win(win, 12, win->h - 20, footer_str, GUI_COLOR_DARK_GRAY);
 }
 
 static void render_win_editor(gui_window_t* win) {
@@ -735,10 +917,10 @@ void gui_launch_desktop(void) {
         .drag_off_x = 0, .drag_off_y = 0
     };
 
-    // Janela 2: migOS HD (Visualizador de arquivos do disco/RAMDisk)
+    // Janela 2: migOS HD (Gerenciador de Arquivos e Diretorios)
     gui_window_t win_files = {
-        .x = 60, .y = 65, .w = 440, .h = 310,
-        .title = "migOS HD - Volume Persistente",
+        .x = 60, .y = 65, .w = 460, .h = 330,
+        .title = "migOS HD - /",
         .is_open = 0, .is_dragging = 0,
         .drag_off_x = 0, .drag_off_y = 0
     };
@@ -767,6 +949,8 @@ void gui_launch_desktop(void) {
     int selected_icon = 0; // 0 = Nenhum, 1 = HD, 2 = TextEdit, 3 = Snake, 4 = Term, 5 = Trash
     uint32_t last_click_time = 0;
     int last_click_icon = 0;
+    uint32_t last_file_click_time = 0;
+    int last_file_click_idx = -1;
     int prev_left_button = 0;
 
     while (running) {
@@ -775,6 +959,25 @@ void gui_launch_desktop(void) {
         unsigned char key;
         while (keyboard_get_doom_key(&pressed, &key)) {
             if (!pressed) continue;
+
+            if (dialog_open) {
+                if (key == KEY_ESCAPE) {
+                    dialog_open = 0;
+                    dialog_type = DIALOG_NONE;
+                } else if (key == KEY_ENTER) {
+                    execute_dialog_action();
+                } else if (key == KEY_BACKSPACE) {
+                    if (dialog_input_pos > 0) {
+                        dialog_input[--dialog_input_pos] = '\0';
+                    }
+                } else if (key >= 32 && key <= 126) {
+                    if (dialog_input_pos < MIGFS_MAX_FILENAME - 2) {
+                        dialog_input[dialog_input_pos++] = (char)key;
+                        dialog_input[dialog_input_pos] = '\0';
+                    }
+                }
+                continue;
+            }
 
             if (key == KEY_ESCAPE) {
                 if (win_script_out.is_open) {
@@ -974,8 +1177,21 @@ void gui_launch_desktop(void) {
             active_menu = 0;
         }
 
-        // 4. Processamento de Janelas e Botoes (com prevencao estrita de click-through)
-        if (active_menu == 0) {
+        // 4. Processamento de Janelas, Dialogos e Botoes
+        if (dialog_open) {
+            int dx = 150, dy = 140, dw = 340, dh = 155;
+            if (click_just_pressed) {
+                // Botao Confirmar / Excluir
+                if (mx >= dx + dw - 185 && mx <= dx + dw - 105 && my >= dy + dh - 34 && my <= dy + dh - 12) {
+                    execute_dialog_action();
+                }
+                // Botao Cancelar
+                else if (mx >= dx + dw - 95 && mx <= dx + dw - 20 && my >= dy + dh - 34 && my <= dy + dh - 12) {
+                    dialog_open = 0;
+                    dialog_type = DIALOG_NONE;
+                }
+            }
+        } else if (active_menu == 0) {
             int click_handled = 0;
 
             if (click_just_pressed) {
@@ -1087,17 +1303,103 @@ void gui_launch_desktop(void) {
                                 win_files.drag_off_x = mx - win_files.x;
                                 win_files.drag_off_y = my - win_files.y;
                             }
-                            // Clique em um arquivo na lista para abrir no TextEdit
-                            else if (mx >= win_files.x + 12 && mx <= win_files.x + win_files.w - 12 &&
-                                     my >= win_files.y + 54 && my <= win_files.y + win_files.h - 10) {
-                                size_t fcount = migfs_get_file_count();
-                                int file_click_idx = (my - (win_files.y + 54)) / 24;
-                                if (file_click_idx >= 0 && (size_t)file_click_idx < fcount && file_click_idx < 10) {
-                                    migfs_file_t* clicked_f = migfs_get_file_by_index(file_click_idx);
-                                    if (clicked_f) {
-                                        if (strstr(clicked_f->name, ".gb")) {
+                            // Botoes da Barra de Ferramentas do Gerenciador de Arquivos
+                            else if (my >= win_files.y + 24 && my <= win_files.y + 44) {
+                                // < Voltar
+                                if (mx >= win_files.x + 10 && mx <= win_files.x + 70) {
+                                    migfs_get_parent_dir(gui_files_cwd, gui_files_cwd, sizeof(gui_files_cwd));
+                                    gui_files_selected = -1;
+                                }
+                                // + Pasta
+                                else if (mx >= win_files.x + 74 && mx <= win_files.x + 136) {
+                                    dialog_open = 1;
+                                    dialog_type = DIALOG_MKDIR;
+                                    strcpy(dialog_title, "Nova Pasta");
+                                    strcpy(dialog_prompt, "Digite o nome da nova pasta:");
+                                    strcpy(dialog_input, "pasta");
+                                    dialog_input_pos = 5;
+                                    dialog_target_item[0] = '\0';
+                                }
+                                // + Arq
+                                else if (mx >= win_files.x + 140 && mx <= win_files.x + 192) {
+                                    dialog_open = 1;
+                                    dialog_type = DIALOG_NEW_FILE;
+                                    strcpy(dialog_title, "Novo Arquivo");
+                                    strcpy(dialog_prompt, "Digite o nome do novo arquivo:");
+                                    strcpy(dialog_input, "novo.txt");
+                                    dialog_input_pos = 8;
+                                    dialog_target_item[0] = '\0';
+                                }
+                                // Mover / Renomear
+                                else if (mx >= win_files.x + 196 && mx <= win_files.x + 246) {
+                                    migfs_dir_item_t items[32];
+                                    size_t count = 0;
+                                    migfs_get_dir_items(gui_files_cwd, items, 32, &count);
+                                    if (gui_files_selected >= 0 && (size_t)gui_files_selected < count) {
+                                        dialog_open = 1;
+                                        dialog_type = DIALOG_MOVE;
+                                        strcpy(dialog_title, "Mover / Renomear");
+                                        strcpy(dialog_prompt, "Digite o novo nome ou caminho:");
+                                        strncpy(dialog_input, items[gui_files_selected].name, sizeof(dialog_input) - 1);
+                                        dialog_input_pos = strlen(dialog_input);
+                                        strncpy(dialog_target_item, items[gui_files_selected].full_path, sizeof(dialog_target_item) - 1);
+                                    }
+                                }
+                                // Copiar
+                                else if (mx >= win_files.x + 250 && mx <= win_files.x + 304) {
+                                    migfs_dir_item_t items[32];
+                                    size_t count = 0;
+                                    migfs_get_dir_items(gui_files_cwd, items, 32, &count);
+                                    if (gui_files_selected >= 0 && (size_t)gui_files_selected < count) {
+                                        dialog_open = 1;
+                                        dialog_type = DIALOG_COPY;
+                                        strcpy(dialog_title, "Copiar Arquivo");
+                                        strcpy(dialog_prompt, "Digite o nome da copia / destino:");
+                                        snprintf(dialog_input, sizeof(dialog_input), "copia_%s", items[gui_files_selected].name);
+                                        dialog_input_pos = strlen(dialog_input);
+                                        strncpy(dialog_target_item, items[gui_files_selected].full_path, sizeof(dialog_target_item) - 1);
+                                    }
+                                }
+                                // Excluir
+                                else if (mx >= win_files.x + 308 && mx <= win_files.x + 366) {
+                                    static migfs_dir_item_t items[32];
+                                    size_t count = 0;
+                                    migfs_get_dir_items(gui_files_cwd, items, 32, &count);
+                                    if (gui_files_selected >= 0 && (size_t)gui_files_selected < count) {
+                                        dialog_open = 1;
+                                        dialog_type = DIALOG_DELETE;
+                                        strcpy(dialog_title, "Excluir Item");
+                                        snprintf(dialog_prompt, sizeof(dialog_prompt), "Excluir '%s'?", items[gui_files_selected].name);
+                                        dialog_input[0] = '\0';
+                                        dialog_input_pos = 0;
+                                        strncpy(dialog_target_item, items[gui_files_selected].full_path, sizeof(dialog_target_item) - 1);
+                                    }
+                                }
+                            }
+                            // Clique na lista de arquivos/pastas
+                            else if (mx >= win_files.x + 10 && mx <= win_files.x + win_files.w - 10 &&
+                                     my >= win_files.y + 60 && my <= win_files.y + win_files.h - 28) {
+                                static migfs_dir_item_t items[32];
+                                size_t count = 0;
+                                migfs_get_dir_items(gui_files_cwd, items, 32, &count);
+
+                                int clicked_idx = (my - (win_files.y + 64)) / 24;
+                                if (clicked_idx >= 0 && (size_t)clicked_idx < count) {
+                                    if (last_file_click_idx == clicked_idx && (now - last_file_click_time) < 55) {
+                                        // Duplo clique bem-sucedido!
+                                        if (items[clicked_idx].is_dir) {
+                                            if (strcmp(items[clicked_idx].name, "..") == 0) {
+                                                migfs_get_parent_dir(gui_files_cwd, gui_files_cwd, sizeof(gui_files_cwd));
+                                            } else {
+                                                strncpy(gui_files_cwd, items[clicked_idx].full_path, sizeof(gui_files_cwd) - 1);
+                                                gui_files_cwd[sizeof(gui_files_cwd) - 1] = '\0';
+                                            }
+                                            gui_files_selected = -1;
+                                            last_file_click_idx = -1;
+                                            last_file_click_time = 0;
+                                        } else if (strstr(items[clicked_idx].name, ".gb")) {
                                             vga_clear();
-                                            gameboy_launch(clicked_f->name);
+                                            gameboy_launch(items[clicked_idx].full_path);
                                             bga_init();
                                             keyboard_set_doom_mode(1);
                                             mouse_set_bounds(0, 0, GUI_WIDTH - 1, GUI_HEIGHT - 1);
@@ -1105,11 +1407,19 @@ void gui_launch_desktop(void) {
                                             active_menu = 0;
                                             selected_icon = 0;
                                             prev_left_button = 0;
+                                            last_file_click_idx = -1;
+                                            last_file_click_time = 0;
                                         } else {
-                                            gui_load_file_to_editor(clicked_f->name);
+                                            gui_load_file_to_editor(items[clicked_idx].full_path);
                                             win_editor.is_open = 1;
                                             bring_window_to_front(WIN_ID_EDITOR);
+                                            last_file_click_idx = -1;
+                                            last_file_click_time = 0;
                                         }
+                                    } else {
+                                        gui_files_selected = clicked_idx;
+                                        last_file_click_idx = clicked_idx;
+                                        last_file_click_time = now;
                                     }
                                 }
                             }
@@ -1326,6 +1636,11 @@ void gui_launch_desktop(void) {
         // Renderiza Menus Suspensos Abertos
         if (active_menu != 0) {
             draw_dropdown_menu(active_menu, hover_menu_item);
+        }
+
+        // Renderiza Caixa de Dialogo Modal se aberta
+        if (dialog_open) {
+            render_dialog_modal();
         }
 
         // Renderiza Cursor do Mouse

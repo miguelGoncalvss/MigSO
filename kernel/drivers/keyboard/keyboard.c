@@ -191,6 +191,17 @@ static unsigned char translate_scancode_to_doom(unsigned char code, int extended
 }
 
 void keyboard_handler_c(void) {
+    unsigned char status = inb(0x64);
+    if (!(status & 0x01)) {
+        pic_send_eoi(1);
+        return;
+    }
+    if (status & 0x20) {
+        // Dados vieram do Mouse PS/2 (porta auxiliar). Deixa para o mouse_handler_c!
+        pic_send_eoi(1);
+        return;
+    }
+
     unsigned char raw_scancode = inb(0x60);
     int is_release = (raw_scancode & 0x80) ? 1 : 0;
     unsigned char code = raw_scancode & 0x7F;

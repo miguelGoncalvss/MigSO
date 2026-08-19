@@ -57,9 +57,10 @@ void mouse_init(void) {
     mouse_wait_read();
     unsigned char status = inb(0x60);
 
-    // Ativa interrupcao do mouse (bit 1) e limpa bit de desabilitar clock do mouse (bit 5)
-    status |= 0x02;
-    status &= ~0x20;
+    // Ativa interrupcoes do teclado (bit 0) e do mouse (bit 1)
+    // Habilita os clocks de ambas as portas (limpa bits 4 e 5)
+    status |= 0x03;
+    status &= ~0x30;
 
     // Escreve de volta o byte de configuracao
     mouse_wait_write();
@@ -71,31 +72,19 @@ void mouse_init(void) {
     mouse_write(0xF6);
     mouse_read(); // ACK (0xFA)
 
-    // 4. Sequencia magica do IntelliMouse para ativar a Roda de Scroll (Z-axis)
-    // Sample rate: 200 -> 100 -> 80
-    mouse_write(0xF3); mouse_read(); mouse_write(200); mouse_read();
-    mouse_write(0xF3); mouse_read(); mouse_write(100); mouse_read();
-    mouse_write(0xF3); mouse_read(); mouse_write(80);  mouse_read();
-
-    // 5. Consulta o ID do dispositivo para verificar se o Scroll Wheel foi aceito
-    mouse_write(0xF2);
-    mouse_read(); // ACK
-    unsigned char device_id = mouse_read();
-
-    if (device_id == 3 || device_id == 4) {
-        has_wheel = 1; // IntelliMouse ativo com pacotes de 4 bytes
-    } else {
-        has_wheel = 0; // Mouse padrao PS/2 (3 bytes)
-    }
-
-    // 6. Habilita o envio continuo de pacotes de dados (Enable Data Reporting)
+    // 4. Habilita o envio continuo de pacotes de dados (Enable Data Reporting)
     mouse_write(0xF4);
     mouse_read(); // ACK (0xFA)
 
-    // 7. Registra a ISR do Mouse no IDT (Vetor 44 / IRQ 12)
+    // Limpa quaisquer bytes pendentes no buffer do controlador 8042
+    while (inb(0x64) & 0x01) {
+        inb(0x60);
+    }
+
+    // 5. Registra a ISR do Mouse no IDT (Vetor 44 / IRQ 12)
     idt_set_gate(44, (unsigned int)mouse_isr_wrapper);
 
-    // 8. Desmascara IRQ2 (Cascata do Slave PIC) e IRQ12 (Mouse)
+    // 6. Desmascara IRQ2 (Cascata do Slave PIC) e IRQ12 (Mouse)
     pic_unmask_irq(2);
     pic_unmask_irq(12);
 }
@@ -114,6 +103,7 @@ void mouse_set_bounds(int min_x, int min_y, int max_x, int max_y) {
     mouse_bound_min_y = min_y;
     mouse_bound_max_x = max_x;
     mouse_bound_max_y = max_y;
+    mouse_cycle = 0;
     if (cur_mouse_state.x < min_x) cur_mouse_state.x = min_x;
     if (cur_mouse_state.x > max_x) cur_mouse_state.x = max_x;
     if (cur_mouse_state.y < min_y) cur_mouse_state.y = min_y;
@@ -123,6 +113,7 @@ void mouse_set_bounds(int min_x, int min_y, int max_x, int max_y) {
 void mouse_set_position(int x, int y) {
     cur_mouse_state.x = x;
     cur_mouse_state.y = y;
+    mouse_cycle = 0;
     if (cur_mouse_state.x < mouse_bound_min_x) cur_mouse_state.x = mouse_bound_min_x;
     if (cur_mouse_state.x > mouse_bound_max_x) cur_mouse_state.x = mouse_bound_max_x;
     if (cur_mouse_state.y < mouse_bound_min_y) cur_mouse_state.y = mouse_bound_min_y;
@@ -141,17 +132,21 @@ mouse_state_t mouse_get_state_val(void) {
 
 static void process_mouse_packet(void) {
     unsigned char flags = mouse_packet[0];
+
+    // Se houver overflow em X ou Y, descarta o pacote
+    if ((flags & 0x40) || (flags & 0x80)) {
+        return;
+    }
+
     int rel_x = (int)mouse_packet[1];
     int rel_y = (int)mouse_packet[2];
-    int rel_z = 0;
 
     // Extensao de sinal dos eixos X e Y
-    if (flags & 0x10) rel_x |= (int)0xFFFFFF00;
-    if (flags & 0x20) rel_y |= (int)0xFFFFFF00;
-
-    if (has_wheel) {
-        signed char z = (signed char)mouse_packet[3];
-        rel_z = (int)z;
+    if (flags & 0x10) {
+        rel_x -= 256;
+    }
+    if (flags & 0x20) {
+        rel_y -= 256;
     }
 
     // Atualiza estado dos botoes e coordenadas
@@ -166,49 +161,34 @@ static void process_mouse_packet(void) {
     if (cur_mouse_state.y < mouse_bound_min_y) cur_mouse_state.y = mouse_bound_min_y;
     if (cur_mouse_state.y > mouse_bound_max_y) cur_mouse_state.y = mouse_bound_max_y;
 
-    cur_mouse_state.scroll_delta = rel_z;
-
-    // Trata rolagem do Scroll Wheel para historico do terminal
-    if (rel_z > 0) {
-        // Gira roda para CIMA -> sobe no historico (3 linhas)
-        vga_scroll_history_up(3);
-    } else if (rel_z < 0) {
-        // Gira roda para BAIXO -> desce no historico (3 linhas)
-        vga_scroll_history_down(3);
-    }
+    cur_mouse_state.scroll_delta = 0;
 }
 
 void mouse_handler_c(void) {
     unsigned char status = inb(0x64);
 
-    // Verifica se ha dados disponiveis e se vieram do canal auxiliar (mouse)
-    if ((status & 0x01) && (status & 0x20)) {
+    while (status & 0x01) {
         unsigned char b = inb(0x60);
 
-        if (mouse_cycle == 0) {
-            // No primeiro byte, o bit 3 eh sempre 1 em pacotes PS/2 validos
-            if (!(b & 0x08)) {
-                pic_send_eoi(12);
-                return; // Descarta byte dessincronizado
-            }
-            mouse_packet[0] = b;
-            mouse_cycle = 1;
-        } else if (mouse_cycle == 1) {
-            mouse_packet[1] = b;
-            mouse_cycle = 2;
-        } else if (mouse_cycle == 2) {
-            mouse_packet[2] = b;
-            if (has_wheel) {
-                mouse_cycle = 3;
-            } else {
+        if (status & 0x20) {
+            // Byte pertencente ao Mouse PS/2 (porta auxiliar)
+            if (mouse_cycle == 0) {
+                // Byte 0: Bit 3 DEVE ser sempre 1 em qualquer pacote PS/2 valido
+                if (b & 0x08) {
+                    mouse_packet[0] = b;
+                    mouse_cycle = 1;
+                }
+            } else if (mouse_cycle == 1) {
+                mouse_packet[1] = b;
+                mouse_cycle = 2;
+            } else if (mouse_cycle == 2) {
+                mouse_packet[2] = b;
                 mouse_cycle = 0;
                 process_mouse_packet();
             }
-        } else if (mouse_cycle == 3) {
-            mouse_packet[3] = b;
-            mouse_cycle = 0;
-            process_mouse_packet();
         }
+
+        status = inb(0x64);
     }
 
     pic_send_eoi(12);

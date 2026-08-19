@@ -8,6 +8,7 @@
 #define MIGFS_MAX_FILES      64
 #define MIGFS_FILE_READONLY  0x01
 #define MIGFS_FILE_SYSTEM    0x02
+#define MIGFS_FILE_DIRECTORY 0x04
 
 #define MIGFS_MAGIC          0x4D494746 // "MIGF" (0x4D494746)
 #define MIGFS_VERSION        1
@@ -48,6 +49,15 @@ typedef struct migfs_file {
     int in_use;
 } migfs_file_t;
 
+// Item de diretorio retornado na listagem de pastas
+typedef struct {
+    char name[MIGFS_MAX_FILENAME];       // Nome simples (ex: "readme.txt" ou "docs")
+    char full_path[MIGFS_MAX_FILENAME];  // Caminho no MIGFS (ex: "docs/readme.txt")
+    uint32_t size;
+    uint32_t flags;
+    int is_dir;
+} migfs_dir_item_t;
+
 // Inicializacao do sistema de arquivos e carga dos arquivos embutidos / do disco
 void          migfs_init(void);
 
@@ -67,6 +77,18 @@ int           migfs_append(const char* name, const char* content, size_t size);
 int           migfs_delete(const char* name);
 int           migfs_exists(const char* name);
 int           load_doom_wad_from_disk(void);
+
+// Gerenciamento de Diretorios e Manipulacao de Arquivos
+int           migfs_mkdir(const char* path);
+int           migfs_rmdir(const char* path);
+int           migfs_move(const char* src, const char* dest);
+int           migfs_copy(const char* src, const char* dest);
+int           migfs_is_dir(const char* path);
+int           migfs_get_dir_items(const char* dir_path, migfs_dir_item_t* items, size_t max_items, size_t* out_count);
+
+void          migfs_path_normalize(const char* path, char* out, size_t out_size);
+void          migfs_path_combine(const char* base, const char* rel, char* out, size_t out_size);
+void          migfs_get_parent_dir(const char* path, char* out_parent, size_t out_size);
 
 // Funcoes de listagem e estatisticas
 size_t        migfs_get_file_count(void);
