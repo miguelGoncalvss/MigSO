@@ -1,6 +1,7 @@
 #include <fs/migfs.h>
 #include <kernel/kheap.h>
 #include <libc/string.h>
+#include <drivers/ata.h>
 
 static migfs_file_t file_table[MIGFS_MAX_FILES];
 
@@ -130,11 +131,82 @@ int migfs_create(const char* name, const char* content, size_t size, uint32_t fl
     return -4; // Limite maximo de arquivos atingido
 }
 
+int migfs_add_buffer(const char* name, char* data, size_t size, uint32_t flags) {
+    if (!name || name[0] == '\0' || !data) return -1;
+    if (migfs_exists(name)) return -2;
+
+    for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
+        if (!file_table[i].in_use) {
+            strncpy(file_table[i].name, name, MIGFS_MAX_FILENAME - 1);
+            file_table[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
+            file_table[i].size = size;
+            file_table[i].flags = flags;
+            file_table[i].data = data;
+            file_table[i].in_use = 1;
+            return 0;
+        }
+    }
+    return -4;
+}
+
+#define DOOM_WAD_LBA_START   1025
+#define DOOM_WAD_SIZE        4196020
+#define DOOM_WAD_SECTORS     8196
+
+int load_doom_wad_from_disk(void) {
+    if (migfs_exists("doom1.wad")) {
+        return 0; // Já carregado
+    }
+
+    if (!ata_is_available()) {
+        return -1;
+    }
+
+    char* wad_data = (char*)kmalloc(DOOM_WAD_SECTORS * 512);
+    if (!wad_data) {
+        return -2;
+    }
+
+    // Leitura em blocos de 256 setores com barra de progresso
+    uint32_t sectors_read = 0;
+    uint32_t chunk = 256;
+
+    while (sectors_read < DOOM_WAD_SECTORS) {
+        uint32_t to_read = DOOM_WAD_SECTORS - sectors_read;
+        if (to_read > chunk) to_read = chunk;
+
+        int ret = ata_read_sectors(DOOM_WAD_LBA_START + sectors_read, to_read, wad_data + (sectors_read * 512));
+        if (ret != 0) {
+            kfree(wad_data);
+            return -3;
+        }
+
+        sectors_read += to_read;
+    }
+
+    if (memcmp(wad_data, "IWAD", 4) != 0 && memcmp(wad_data, "PWAD", 4) != 0) {
+        kfree(wad_data);
+        return -4;
+    }
+
+    int32_t numlumps = *(int32_t*)(wad_data + 4);
+    int32_t infotableofs = *(int32_t*)(wad_data + 8);
+    printf("[MIGFS] DOOM1.WAD carregado: %d lumps, offset %d, base=%p\n", numlumps, infotableofs, wad_data);
+
+    migfs_add_buffer("doom1.wad", wad_data, DOOM_WAD_SIZE, MIGFS_FILE_READONLY);
+    migfs_add_buffer("DOOM1.WAD", wad_data, DOOM_WAD_SIZE, MIGFS_FILE_READONLY);
+    return 0;
+}
+
 migfs_file_t* migfs_open(const char* name) {
     if (!name || name[0] == '\0') return NULL;
 
+    if (name[0] == '.' && (name[1] == '/' || name[1] == '\\')) {
+        name += 2;
+    }
+
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
-        if (file_table[i].in_use && strcmp(file_table[i].name, name) == 0) {
+        if (file_table[i].in_use && (strcmp(file_table[i].name, name) == 0 || strcasecmp(file_table[i].name, name) == 0)) {
             return &file_table[i];
         }
     }

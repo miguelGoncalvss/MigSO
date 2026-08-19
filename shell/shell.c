@@ -1,11 +1,15 @@
 #include <shell/shell.h>
 #include <drivers/vga.h>
 #include <drivers/keyboard.h>
+#include <drivers/ata.h>
+#include <games/snake.h>
 #include <arch/i386/io.h>
 #include <arch/i386/timer.h>
+#include <arch/i386/reboot.h>
 #include <kernel/pmm.h>
 #include <kernel/kheap.h>
 #include <fs/migfs.h>
+#include <gui/gui.h>
 #include <libc/string.h>
 #include <libc/stdlib.h>
 
@@ -81,29 +85,7 @@ const char* shell_history_down(void) {
     }
 }
 
-// Reinicializacao forcada via Triple Fault (Garantido no QEMU e x86 Bare-Metal)
-static void reboot_system(void) {
-    vga_clear();
-    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
-    vga_puts("Reiniciando o migOS...\n");
 
-    outb(0xCF9, 0x02);
-    outb(0xCF9, 0x06);
-    outb(0x64, 0xFE);
-
-    // Carrega IDT com limite 0 e dispara interrupcao (Forca Reset de Hardware)
-    __asm__ volatile (
-        "cli\n"
-        "pushl $0\n"
-        "pushl $0\n"
-        "lidt (%esp)\n"
-        "int $3\n"
-    );
-
-    while (1) {
-        __asm__ volatile ("cli; hlt");
-    }
-}
 
 static int check_key_pressed(void) {
     if (keyboard_has_key()) {
@@ -152,29 +134,29 @@ static void matrix_effect(void) {
             int y = drops[x];
 
             if (y >= 0 && y < VGA_HEIGHT) {
-                char ch = (rand() % 2 == 0) ? '0' : '1';
-                VGA_MEMORY[y * VGA_WIDTH + x] = (unsigned short)ch | ((unsigned short)VGA_COLOR_WHITE << 8);
+                char ch = (char)(33 + (rand() % 93));
+                vga_set_cell(x, y, ch, VGA_COLOR_WHITE, VGA_COLOR_BLACK);
             }
 
             if ((y - 1) >= 0 && (y - 1) < VGA_HEIGHT) {
-                char ch = (rand() % 2 == 0) ? '0' : '1';
-                VGA_MEMORY[(y - 1) * VGA_WIDTH + x] = (unsigned short)ch | ((unsigned short)VGA_COLOR_LIGHT_GREEN << 8);
+                char ch = (char)(33 + (rand() % 93));
+                vga_set_cell(x, y - 1, ch, VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
             }
 
             if ((y - 2) >= 0 && (y - 2) < VGA_HEIGHT) {
-                char ch = (rand() % 2 == 0) ? '0' : '1';
-                VGA_MEMORY[(y - 2) * VGA_WIDTH + x] = (unsigned short)ch | ((unsigned short)VGA_COLOR_GREEN << 8);
+                char ch = (char)(33 + (rand() % 93));
+                vga_set_cell(x, y - 2, ch, VGA_COLOR_GREEN, VGA_COLOR_BLACK);
             }
 
-            if ((y - 8) >= 0 && (y - 8) < VGA_HEIGHT) {
-                VGA_MEMORY[(y - 8) * VGA_WIDTH + x] = (unsigned short)' ' | ((unsigned short)VGA_COLOR_BLACK << 8);
+            if ((y - 10) >= 0 && (y - 10) < VGA_HEIGHT) {
+                vga_set_cell(x, y - 10, ' ', VGA_COLOR_BLACK, VGA_COLOR_BLACK);
             }
 
             drops[x]++;
-            if (drops[x] - 8 >= VGA_HEIGHT) drops[x] = 0;
+            if (drops[x] - 10 >= VGA_HEIGHT) drops[x] = 0;
         }
 
-        if (sleep_with_exit_check(50)) break;
+        if (sleep_with_exit_check(35)) break;
     }
 
     matrix_running = 0;
@@ -558,6 +540,8 @@ void shell_execute(const char* command) {
         vga_puts("  memtest             - Executa teste de alocacao dinamica\n");
         vga_puts("  uptime              - Exibe o tempo de atividade do sistema\n");
         vga_puts("  matrix              - Inicia a chuva de codigos Matrix\n");
+        vga_puts("  snake               - Executa o Jogo da Cobrinha (Snake Game)\n");
+        vga_puts("  gui / desktop       - Inicia a Interface Grafica Mac OS System 7 Classic (640x480)\n");
         vga_puts("  version             - Exibe a versao atual do kernel\n");
         vga_puts("  about               - Informacoes sobre o autor e o sistema\n");
         vga_puts("  panic               - Dispara Kernel Panic de teste\n");
@@ -592,6 +576,15 @@ void shell_execute(const char* command) {
         vga_puts(" ticks do PIT)\n");
     } else if (strcmp(command, "matrix") == 0) {
         matrix_effect();
+    } else if (strcmp(command, "snake") == 0) {
+        snake_game_main();
+    } else if (strcmp(command, "gui") == 0 || strcmp(command, "desktop") == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        vga_puts("Iniciando migOS Classic Desktop (Mac OS System 7 640x480)...\n");
+        sleep(200);
+        gui_launch_desktop();
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("Retornado ao terminal de comandos migOS.\n\n");
     } else if (strcmp(command, "version") == 0) {
         vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
         vga_puts("migOS Kernel v0.5 (32-bit Protected Mode)\n");
