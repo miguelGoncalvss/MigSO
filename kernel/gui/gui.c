@@ -3,6 +3,8 @@
 #include <drivers/vga.h>
 #include <drivers/mouse.h>
 #include <drivers/keyboard.h>
+#include <drivers/rtc.h>
+#include <drivers/sound.h>
 #include <arch/i386/timer.h>
 #include <arch/i386/reboot.h>
 #include <kernel/kheap.h>
@@ -405,10 +407,10 @@ static void draw_menu_bar(int active_menu) {
     gui_draw_string(235, 2, "Special", GUI_COLOR_BLACK);
     gui_draw_string(305, 2, "Help", GUI_COLOR_BLACK);
 
-    // Relogio de Uptime no canto superior direito
-    char up_str[32];
-    sprintf(up_str, "%us", (unsigned int)get_uptime());
-    gui_draw_string(GUI_WIDTH - 60, 2, up_str, GUI_COLOR_DARK_GRAY);
+    // Relogio Real CMOS / RTC no canto superior direito
+    char rtc_time_str[16];
+    rtc_format_time_full(rtc_time_str, sizeof(rtc_time_str));
+    gui_draw_string(GUI_WIDTH - 76, 2, rtc_time_str, GUI_COLOR_BLACK);
 
     // Destaque do menu ativo selecionado
     if (active_menu == 1) { // Menu migOS
@@ -421,6 +423,9 @@ static void draw_menu_bar(int active_menu) {
     } else if (active_menu == 3) { // Menu File
         gui_draw_rect_fill(80, 0, 48, 20, GUI_COLOR_BLACK);
         gui_draw_string(85, 2, "File", GUI_COLOR_WHITE);
+    } else if (active_menu == 4) { // Menu Relogio / RTC
+        gui_draw_rect_fill(GUI_WIDTH - 82, 0, 80, 20, GUI_COLOR_BLACK);
+        gui_draw_string(GUI_WIDTH - 76, 2, rtc_time_str, GUI_COLOR_WHITE);
     }
 }
 
@@ -495,6 +500,30 @@ static void draw_dropdown_menu(int menu_id, int hover_item) {
                 gui_draw_string(mx + 8, iy, items[i], GUI_COLOR_BLACK);
             }
         }
+    } else if (menu_id == 4) {
+        // Widget Dropdown "Relogio RTC & Calendario"
+        int mx = GUI_WIDTH - 225, my = 21, mw = 220, mh = 96;
+        gui_draw_rect_fill(mx + 3, my + 3, mw, mh, GUI_COLOR_BLACK);
+        gui_draw_rect_fill(mx, my, mw, mh, GUI_COLOR_WHITE);
+        gui_draw_rect(mx, my, mw, mh, GUI_COLOR_BLACK);
+
+        char d_str[32], t_str[32], up_str[48];
+        rtc_format_date(d_str, sizeof(d_str));
+        rtc_format_time_full(t_str, sizeof(t_str));
+        unsigned int u = get_uptime();
+        snprintf(up_str, sizeof(up_str), "Uptime: %u min %02u s", u / 60, u % 60);
+
+        gui_draw_rect_fill(mx + 2, my + 2, mw - 4, 18, GUI_COLOR_TITLE_BLUE);
+        gui_draw_string(mx + 8, my + 3, "CMOS Real-Time Clock", GUI_COLOR_WHITE);
+
+        gui_draw_string(mx + 12, my + 26, "Data Real: ", GUI_COLOR_DARK_GRAY);
+        gui_draw_string(mx + 95, my + 26, d_str, GUI_COLOR_BLACK);
+
+        gui_draw_string(mx + 12, my + 46, "Hora Real: ", GUI_COLOR_DARK_GRAY);
+        gui_draw_string(mx + 95, my + 46, t_str, GUI_COLOR_BLACK);
+
+        gui_draw_line_h(mx + 8, my + 68, mw - 16, GUI_COLOR_LIGHT_GRAY);
+        gui_draw_string(mx + 12, my + 74, up_str, GUI_COLOR_DARK_GRAY);
     }
 }
 
@@ -514,9 +543,21 @@ void gui_draw_window(gui_window_t* win) {
         gui_draw_line_h(win->x + 24, line_y, win->w - 32, GUI_COLOR_DARK_GRAY);
     }
 
-    // Go-Away Box (Botao Fechar quadrado)
-    gui_draw_rect(win->x + 4, win->y + 3, 14, 14, GUI_COLOR_BLACK);
-    gui_draw_rect_fill(win->x + 5, win->y + 4, 12, 12, GUI_COLOR_WHITE);
+    // Go-Away Box (Botao Fechar quadrado classico Mac OS System 7)
+    int box_x = win->x + 5;
+    int box_y = win->y + 4;
+    gui_draw_rect(box_x, box_y, 13, 13, GUI_COLOR_BLACK);
+
+    if (win->close_pressed) {
+        // Animacao / Estado Pressionado (Mac OS 7 Go-Away Box)
+        gui_draw_rect_fill(box_x + 1, box_y + 1, 11, 11, GUI_COLOR_LIGHT_GRAY);
+        gui_draw_rect(box_x + 2, box_y + 2, 9, 9, GUI_COLOR_MID_GRAY);
+        gui_draw_rect_fill(box_x + 3, box_y + 3, 7, 7, GUI_COLOR_BLACK);
+    } else {
+        // Estado Normal
+        gui_draw_rect_fill(box_x + 1, box_y + 1, 11, 11, GUI_COLOR_WHITE);
+        gui_draw_rect(box_x + 2, box_y + 2, 9, 9, GUI_COLOR_LIGHT_GRAY);
+    }
 
     // Titulo centralizado
     int title_len = (int)strlen(win->title) * 8;
@@ -571,6 +612,7 @@ static void gui_load_file_to_editor(const char* filename) {
 static void gui_save_editor_file(void) {
     migfs_write(gui_edit_filename, gui_edit_buf, (size_t)gui_edit_len);
     gui_edit_dirty = 0;
+    sound_play_sfx(SFX_SUCCESS);
 }
 
 // ============================================================
@@ -607,22 +649,33 @@ static void render_win_about(gui_window_t* win) {
     gui_draw_string_win(win, 44, 30, "migOS System 7 Classic Desktop", GUI_COLOR_BLACK);
     gui_draw_line_h(win->x + 12, win->y + 52, win->w - 24, GUI_COLOR_LIGHT_GRAY);
 
-    gui_draw_string_win(win, 14, 60, "Sistema Operacional: migOS Kernel v0.5", GUI_COLOR_DARK_GRAY);
-    gui_draw_string_win(win, 14, 82, "Arquitetura: x86 IA-32 / Modo Protegido (Ring 0)", GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 58, "Sistema Operacional: migOS Kernel v0.5", GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 76, "Arquitetura: x86 IA-32 / Modo Protegido (Ring 0)", GUI_COLOR_DARK_GRAY);
+
+    char dt_str[64];
+    rtc_format_datetime(dt_str, sizeof(dt_str));
+    char rtc_disp[80];
+    snprintf(rtc_disp, sizeof(rtc_disp), "Relogio Real (CMOS RTC): %s", dt_str);
+    gui_draw_string_win(win, 14, 94, rtc_disp, GUI_COLOR_DARK_GRAY);
+
+    unsigned int up_sec = get_uptime();
+    snprintf(rtc_disp, sizeof(rtc_disp), "Tempo Ativo: %u min %02u s (%u ticks PIT @ 100Hz)",
+             up_sec / 60, up_sec % 60, timer_get_ticks());
+    gui_draw_string_win(win, 14, 112, rtc_disp, GUI_COLOR_DARK_GRAY);
 
     char mem_str[64];
     sprintf(mem_str, "Memoria Fisica (PMM): %u MB (16,384 Frames 4KB)", (unsigned int)(pmm_get_total_memory() / (1024 * 1024)));
-    gui_draw_string_win(win, 14, 104, mem_str, GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 130, mem_str, GUI_COLOR_DARK_GRAY);
 
     sprintf(mem_str, "Heap Dinamico: %u KB Livres de 8 MB", (unsigned int)(kheap_get_free_bytes() / 1024));
-    gui_draw_string_win(win, 14, 126, mem_str, GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 148, mem_str, GUI_COLOR_DARK_GRAY);
 
-    gui_draw_string_win(win, 14, 148, "Display: 640x480 @ 32-bit True Color (BGA LFB)", GUI_COLOR_DARK_GRAY);
-    gui_draw_string_win(win, 14, 170, "Disco: MIGFS Persistente em Disco ATA Primario", GUI_COLOR_DARK_GRAY);
-    gui_draw_string_win(win, 14, 192, "Mouse: PS/2 IntelliMouse com Roda de Rolagem", GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 166, "Display: 640x480 @ 32-bit True Color (BGA LFB)", GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 184, "Disco: MIGFS Persistente em Disco ATA Primario", GUI_COLOR_DARK_GRAY);
+    gui_draw_string_win(win, 14, 202, "Mouse: PS/2 IntelliMouse com Roda de Rolagem", GUI_COLOR_DARK_GRAY);
 
-    gui_draw_line_h(win->x + 12, win->y + 220, win->w - 24, GUI_COLOR_LIGHT_GRAY);
-    gui_draw_string_win(win, 14, 234, "Arraste a janela ou feche no botao [X]", GUI_COLOR_ACCENT_BLUE);
+    gui_draw_line_h(win->x + 12, win->y + 224, win->w - 24, GUI_COLOR_LIGHT_GRAY);
+    gui_draw_string_win(win, 14, 236, "Arraste a janela ou feche no botao [X]", GUI_COLOR_ACCENT_BLUE);
     gui_draw_string_win(win, 14, 256, "Pressione [ESC] para retornar ao Terminal CLI", GUI_COLOR_DARK_GRAY);
 }
 
@@ -656,6 +709,7 @@ static void execute_dialog_action(void) {
             char full_p[MIGFS_MAX_FILENAME];
             migfs_path_combine(gui_files_cwd, dialog_input, full_p, sizeof(full_p));
             migfs_mkdir(full_p);
+            sound_play_sfx(SFX_SUCCESS);
         }
     } else if (dialog_type == DIALOG_NEW_FILE) {
         if (dialog_input[0] != '\0') {
@@ -663,18 +717,21 @@ static void execute_dialog_action(void) {
             migfs_path_combine(gui_files_cwd, dialog_input, full_p, sizeof(full_p));
             migfs_create(full_p, "", 0, 0);
             gui_load_file_to_editor(full_p);
+            sound_play_sfx(SFX_SUCCESS);
         }
     } else if (dialog_type == DIALOG_MOVE) {
         if (dialog_input[0] != '\0' && dialog_target_item[0] != '\0') {
             char full_p[MIGFS_MAX_FILENAME];
             migfs_path_combine(gui_files_cwd, dialog_input, full_p, sizeof(full_p));
             migfs_move(dialog_target_item, full_p);
+            sound_play_sfx(SFX_SUCCESS);
         }
     } else if (dialog_type == DIALOG_COPY) {
         if (dialog_input[0] != '\0' && dialog_target_item[0] != '\0') {
             char full_p[MIGFS_MAX_FILENAME];
             migfs_path_combine(gui_files_cwd, dialog_input, full_p, sizeof(full_p));
             migfs_copy(dialog_target_item, full_p);
+            sound_play_sfx(SFX_SUCCESS);
         }
     } else if (dialog_type == DIALOG_DELETE) {
         if (dialog_target_item[0] != '\0') {
@@ -683,6 +740,7 @@ static void execute_dialog_action(void) {
             } else {
                 migfs_delete(dialog_target_item);
             }
+            sound_play_sfx(SFX_TRASH);
         }
     }
 
@@ -774,24 +832,33 @@ static void render_win_files(gui_window_t* win) {
 
         if (items[i].is_dir) {
             draw_icon_folder_24x18(list_x + 6, item_y, icon_folder_24x18);
-            gui_draw_string_clipped(list_x + 36, item_y + 2, items[i].name, text_color, list_x + 220);
-            gui_draw_string_clipped(list_x + 240, item_y + 2, "<PASTA>", meta_color, list_x + 330);
+            gui_draw_string_clipped(list_x + 36, item_y + 2, items[i].name, text_color, list_x + 190);
+            gui_draw_string_clipped(list_x + 195, item_y + 2, "<PASTA>", meta_color, list_x + 270);
         } else if (strstr(items[i].name, ".gb")) {
             draw_icon_24x18(list_x + 6, item_y, icon_pokemon_24x18);
-            gui_draw_string_clipped(list_x + 36, item_y + 2, items[i].name, text_color, list_x + 220);
+            gui_draw_string_clipped(list_x + 36, item_y + 2, items[i].name, text_color, list_x + 190);
             char sz_str[32];
             sprintf(sz_str, "%u B", (unsigned int)items[i].size);
-            gui_draw_string_clipped(list_x + 240, item_y + 2, sz_str, meta_color, list_x + 330);
+            gui_draw_string_clipped(list_x + 195, item_y + 2, sz_str, meta_color, list_x + 270);
         } else {
             draw_icon_24x18(list_x + 6, item_y, icon_edit_24x18);
-            gui_draw_string_clipped(list_x + 36, item_y + 2, items[i].name, text_color, list_x + 220);
+            gui_draw_string_clipped(list_x + 36, item_y + 2, items[i].name, text_color, list_x + 190);
             char sz_str[32];
             sprintf(sz_str, "%u B", (unsigned int)items[i].size);
-            gui_draw_string_clipped(list_x + 240, item_y + 2, sz_str, meta_color, list_x + 330);
+            gui_draw_string_clipped(list_x + 195, item_y + 2, sz_str, meta_color, list_x + 270);
         }
 
+        // Timestamp Real do Arquivo (Data/Hora de Modificacao)
+        char time_buf[24];
+        if (items[i].modified_time > 0) {
+            rtc_format_epoch_short(items[i].modified_time, time_buf, sizeof(time_buf));
+        } else {
+            strcpy(time_buf, "--/-- --:--");
+        }
+        gui_draw_string_clipped(list_x + 275, item_y + 2, time_buf, meta_color, list_x + 380);
+
         const char* attr = (items[i].flags & MIGFS_FILE_READONLY) ? "[RO]" : "[RW]";
-        gui_draw_string_clipped(list_x + 350, item_y + 2, attr, meta_color, list_x + list_w - 6);
+        gui_draw_string_clipped(list_x + 390, item_y + 2, attr, meta_color, list_x + list_w - 6);
     }
 
     char footer_str[80];
@@ -914,7 +981,8 @@ void gui_launch_desktop(void) {
         .x = 40, .y = 45, .w = 460, .h = 340,
         .title = "System Profile - About migOS",
         .is_open = 1, .is_dragging = 0,
-        .drag_off_x = 0, .drag_off_y = 0
+        .drag_off_x = 0, .drag_off_y = 0,
+        .close_pressed = 0
     };
 
     // Janela 2: migOS HD (Gerenciador de Arquivos e Diretorios)
@@ -922,7 +990,8 @@ void gui_launch_desktop(void) {
         .x = 60, .y = 65, .w = 460, .h = 330,
         .title = "migOS HD - /",
         .is_open = 0, .is_dragging = 0,
-        .drag_off_x = 0, .drag_off_y = 0
+        .drag_off_x = 0, .drag_off_y = 0,
+        .close_pressed = 0
     };
 
     // Janela 3: TextEdit (Editor de Texto com Persistencia em Disco e Script Runner)
@@ -930,7 +999,8 @@ void gui_launch_desktop(void) {
         .x = 75, .y = 48, .w = 465, .h = 355,
         .title = "TextEdit - readme.txt",
         .is_open = 0, .is_dragging = 0,
-        .drag_off_x = 0, .drag_off_y = 0
+        .drag_off_x = 0, .drag_off_y = 0,
+        .close_pressed = 0
     };
 
     // Janela 4: Script Output Window
@@ -938,7 +1008,8 @@ void gui_launch_desktop(void) {
         .x = 100, .y = 80, .w = 430, .h = 280,
         .title = "Script Runner - Resultado",
         .is_open = 0, .is_dragging = 0,
-        .drag_off_x = 0, .drag_off_y = 0
+        .drag_off_x = 0, .drag_off_y = 0,
+        .close_pressed = 0
     };
 
     gui_load_file_to_editor("readme.txt");
@@ -952,6 +1023,7 @@ void gui_launch_desktop(void) {
     uint32_t last_file_click_time = 0;
     int last_file_click_idx = -1;
     int prev_left_button = 0;
+    int close_box_tracking = 0;
 
     while (running) {
         // 1. Processa Teclado
@@ -1170,6 +1242,8 @@ void gui_launch_desktop(void) {
                 active_menu = (active_menu == 3) ? 0 : 3;
             } else if (mx >= 230 && mx <= 300) {
                 active_menu = (active_menu == 2) ? 0 : 2;
+            } else if (mx >= GUI_WIDTH - 85 && mx <= GUI_WIDTH - 2) {
+                active_menu = (active_menu == 4) ? 0 : 4;
             } else {
                 active_menu = 0;
             }
@@ -1206,9 +1280,10 @@ void gui_launch_desktop(void) {
                             bring_window_to_front(WIN_ID_SCRIPT_OUT);
                             click_handled = 1;
 
-                            if (mx >= win_script_out.x + 4 && mx <= win_script_out.x + 18 &&
-                                my >= win_script_out.y + 3 && my <= win_script_out.y + 17) {
-                                win_script_out.is_open = 0;
+                            if (mx >= win_script_out.x + 4 && mx <= win_script_out.x + 19 &&
+                                my >= win_script_out.y + 3 && my <= win_script_out.y + 18) {
+                                close_box_tracking = WIN_ID_SCRIPT_OUT;
+                                win_script_out.close_pressed = 1;
                             } else if (my <= win_script_out.y + 20) {
                                 win_script_out.is_dragging = 1;
                                 win_script_out.drag_off_x = mx - win_script_out.x;
@@ -1226,9 +1301,10 @@ void gui_launch_desktop(void) {
                             bring_window_to_front(WIN_ID_EDITOR);
                             click_handled = 1;
 
-                            if (mx >= win_editor.x + 4 && mx <= win_editor.x + 18 &&
-                                my >= win_editor.y + 3 && my <= win_editor.y + 17) {
-                                win_editor.is_open = 0;
+                            if (mx >= win_editor.x + 4 && mx <= win_editor.x + 19 &&
+                                my >= win_editor.y + 3 && my <= win_editor.y + 18) {
+                                close_box_tracking = WIN_ID_EDITOR;
+                                win_editor.close_pressed = 1;
                             } else if (my <= win_editor.y + 20) {
                                 win_editor.is_dragging = 1;
                                 win_editor.drag_off_x = mx - win_editor.x;
@@ -1295,9 +1371,10 @@ void gui_launch_desktop(void) {
                             bring_window_to_front(WIN_ID_FILES);
                             click_handled = 1;
 
-                            if (mx >= win_files.x + 4 && mx <= win_files.x + 18 &&
-                                my >= win_files.y + 3 && my <= win_files.y + 17) {
-                                win_files.is_open = 0;
+                            if (mx >= win_files.x + 4 && mx <= win_files.x + 19 &&
+                                my >= win_files.y + 3 && my <= win_files.y + 18) {
+                                close_box_tracking = WIN_ID_FILES;
+                                win_files.close_pressed = 1;
                             } else if (my <= win_files.y + 20) {
                                 win_files.is_dragging = 1;
                                 win_files.drag_off_x = mx - win_files.x;
@@ -1432,9 +1509,10 @@ void gui_launch_desktop(void) {
                             bring_window_to_front(WIN_ID_ABOUT);
                             click_handled = 1;
 
-                            if (mx >= win_about.x + 4 && mx <= win_about.x + 18 &&
-                                my >= win_about.y + 3 && my <= win_about.y + 17) {
-                                win_about.is_open = 0;
+                            if (mx >= win_about.x + 4 && mx <= win_about.x + 19 &&
+                                my >= win_about.y + 3 && my <= win_about.y + 18) {
+                                close_box_tracking = WIN_ID_ABOUT;
+                                win_about.close_pressed = 1;
                             } else if (my <= win_about.y + 20) {
                                 win_about.is_dragging = 1;
                                 win_about.drag_off_x = mx - win_about.x;
@@ -1446,7 +1524,36 @@ void gui_launch_desktop(void) {
                 }
             }
 
+            // Rastreamento dinamico do estado pressionado do Go-Away Box durante o clique
+            if (mouse.left_button && close_box_tracking != 0) {
+                gui_window_t* tw = NULL;
+                if (close_box_tracking == WIN_ID_ABOUT) tw = &win_about;
+                else if (close_box_tracking == WIN_ID_FILES) tw = &win_files;
+                else if (close_box_tracking == WIN_ID_EDITOR) tw = &win_editor;
+                else if (close_box_tracking == WIN_ID_SCRIPT_OUT) tw = &win_script_out;
+
+                if (tw && tw->is_open) {
+                    int in_box = (mx >= tw->x + 4 && mx <= tw->x + 19 && my >= tw->y + 3 && my <= tw->y + 18);
+                    tw->close_pressed = in_box;
+                }
+            }
+
+            // Liberacao do mouse (Mouse Up): executa o fechamento com animacao se solto dentro do quadrado
             if (!mouse.left_button) {
+                if (close_box_tracking != 0) {
+                    gui_window_t* tw = NULL;
+                    if (close_box_tracking == WIN_ID_ABOUT) tw = &win_about;
+                    else if (close_box_tracking == WIN_ID_FILES) tw = &win_files;
+                    else if (close_box_tracking == WIN_ID_EDITOR) tw = &win_editor;
+                    else if (close_box_tracking == WIN_ID_SCRIPT_OUT) tw = &win_script_out;
+
+                    if (tw && tw->is_open && tw->close_pressed) {
+                        tw->is_open = 0;
+                    }
+                    if (tw) tw->close_pressed = 0;
+                    close_box_tracking = 0;
+                }
+
                 win_about.is_dragging = 0;
                 win_files.is_dragging = 0;
                 win_editor.is_dragging = 0;

@@ -10,6 +10,8 @@
 #include <drivers/keyboard.h>
 #include <drivers/mouse.h>
 #include <drivers/ata.h>
+#include <drivers/rtc.h>
+#include <drivers/sound.h>
 #include <shell/shell.h>
 
 void kernel_main(void)
@@ -29,6 +31,8 @@ void kernel_main(void)
     isr_init();         // Registra tratadores de excecao 0-31
     pic_remap();
     timer_init(100);    // Inicializa o PIT em 100 Hz (1 tick = 10ms)
+    rtc_init();         // Inicializa o Real-Time Clock (CMOS / RTC)
+    sound_init();       // Inicializa o Driver de Audio PC Speaker (PIT Canal 2 / Porta 0x61)
     keyboard_init();
     mouse_init();       // Inicializa Mouse PS/2 com suporte a Scroll Wheel
     ata_init();         // Inicializa o disco ATA/IDE primario (PIO Mode)
@@ -40,7 +44,7 @@ void kernel_main(void)
     // Monta o sistema de arquivos RAMDisk (MIGFS) e carrega arquivos embutidos
     migfs_init();
 
-    vga_puts("[OK] IDT, ISRs (0-31), PIC, PIT (100Hz), Teclado, Mouse PS/2 e Disco ATA ativos.\n");
+    vga_puts("[OK] IDT, ISRs (0-31), PIC, PIT (100Hz), CMOS RTC, PC Speaker, Teclado, Mouse e ATA.\n");
     vga_puts("[OK] PMM (Frames 4KB), KHeap (8MB), RAMDisk / MIGFS e Jogos prontos.\n");
     vga_puts("[OK] RAMDisk / MIGFS e Subssistema DOOM Bare-Metal prontos.\n");
     vga_puts("[OK] Shell interativo carregado.\n");
@@ -50,6 +54,9 @@ void kernel_main(void)
     shell_init();
 
     __asm__ volatile ("sti");
+
+    // Toca o Mac OS Classic Startup Chime na inicializacao
+    sound_play_sfx(SFX_STARTUP);
 
     while (1) {
         shell_update();

@@ -29,6 +29,7 @@ typedef struct {
     int is_dragging;
     int drag_off_x;
     int drag_off_y;
+    int close_pressed;
 } gui_window_t;
 
 // Ponto de entrada do ambiente grafico (bloqueia ate o usuario fechar/ESC)

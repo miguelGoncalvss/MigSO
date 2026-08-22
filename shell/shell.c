@@ -2,6 +2,8 @@
 #include <drivers/vga.h>
 #include <drivers/keyboard.h>
 #include <drivers/ata.h>
+#include <drivers/rtc.h>
+#include <drivers/sound.h>
 #include <games/snake.h>
 #include <arch/i386/io.h>
 #include <arch/i386/timer.h>
@@ -24,6 +26,8 @@ static char history[HISTORY_MAX][BUFFER_SIZE];
 static int history_count = 0;
 static int history_index = 0;
 
+static char shell_cwd[MIGFS_MAX_FILENAME] = "/";
+
 static char pending_cmd[BUFFER_SIZE];
 static volatile int has_pending_cmd = 0;
 
@@ -35,6 +39,19 @@ void shell_post_command(const char* command) {
 
 int shell_has_pending_command(void) {
     return has_pending_cmd;
+}
+
+void shell_print_prompt(void) {
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("migOS:");
+    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+    vga_puts(shell_cwd);
+    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    vga_puts("> ");
+}
+
+static void resolve_shell_path(const char* rel_or_abs, char* out, size_t out_size) {
+    migfs_path_combine(shell_cwd, rel_or_abs, out, out_size);
 }
 
 void shell_update(void) {
@@ -85,6 +102,217 @@ const char* shell_history_down(void) {
     } else {
         history_index = history_count;
         return "";
+    }
+}
+
+void shell_history_list(void) {
+    if (history_count == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_BROWN, VGA_COLOR_BLACK);
+        vga_puts("Nenhum comando no historico recente.\n");
+        return;
+    }
+
+    char buf[16];
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("Historico de Comandos do Shell (use '!<num>' para executar):\n");
+    vga_puts("------------------------------------------------------------\n");
+    for (int i = 0; i < history_count; i++) {
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("  [");
+        itoa(i + 1, buf, 10);
+        vga_puts(buf);
+        vga_puts("] ");
+        vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+        vga_puts(history[i]);
+        vga_putc('\n');
+    }
+}
+
+void shell_autocomplete(char* buffer, int* cursor_pos, int* buffer_len) {
+    if (!buffer || !cursor_pos || !buffer_len) return;
+
+    int cur = *cursor_pos;
+    int token_start = cur;
+    while (token_start > 0 && buffer[token_start - 1] != ' ') {
+        token_start--;
+    }
+    int token_len = cur - token_start;
+
+    int is_first_word = 1;
+    for (int i = 0; i < token_start; i++) {
+        if (buffer[i] != ' ') {
+            is_first_word = 0;
+            break;
+        }
+    }
+
+    char prefix[MIGFS_MAX_FILENAME];
+    if (token_len >= MIGFS_MAX_FILENAME) token_len = MIGFS_MAX_FILENAME - 1;
+    for (int i = 0; i < token_len; i++) {
+        prefix[i] = buffer[token_start + i];
+    }
+    prefix[token_len] = '\0';
+
+    #define MAX_AUTO_MATCHES 32
+    char matches[MAX_AUTO_MATCHES][MIGFS_MAX_FILENAME];
+    int is_dir_match[MAX_AUTO_MATCHES];
+    int match_count = 0;
+
+    if (is_first_word) {
+        static const char* known_cmds[] = {
+            "help", "ls", "dir", "cd", "pwd", "mkdir", "md", "rmdir", "rd",
+            "mv", "cp", "touch", "cat", "type", "write", "echo", "rm", "del",
+            "edit", "nano", "vi", "vim", "run", "exec", "batch",
+            "gameboy", "gb", "pokemon", "gbinfo", "calc", "eval", "sync",
+            "meminfo", "memtest", "free", "df", "uptime", "date", "time",
+            "whoami", "hostname", "history", "matrix", "snake", "gui", "desktop",
+            "version", "about", "panic", "reboot", "clear", "cls"
+        };
+        int num_known = sizeof(known_cmds) / sizeof(known_cmds[0]);
+
+        for (int i = 0; i < num_known && match_count < MAX_AUTO_MATCHES; i++) {
+            if (strncmp(known_cmds[i], prefix, token_len) == 0) {
+                strncpy(matches[match_count], known_cmds[i], MIGFS_MAX_FILENAME - 1);
+                matches[match_count][MIGFS_MAX_FILENAME - 1] = '\0';
+                is_dir_match[match_count] = 0;
+                match_count++;
+            }
+        }
+
+        migfs_dir_item_t cwd_items[32];
+        size_t cwd_count = 0;
+        migfs_get_dir_items(shell_cwd, cwd_items, 32, &cwd_count);
+        for (size_t i = 0; i < cwd_count && match_count < MAX_AUTO_MATCHES; i++) {
+            if (strncmp(cwd_items[i].name, prefix, token_len) == 0) {
+                strncpy(matches[match_count], cwd_items[i].name, MIGFS_MAX_FILENAME - 1);
+                matches[match_count][MIGFS_MAX_FILENAME - 1] = '\0';
+                is_dir_match[match_count] = cwd_items[i].is_dir;
+                match_count++;
+            }
+        }
+    } else {
+        char dir_to_search[MIGFS_MAX_FILENAME];
+        char file_prefix[MIGFS_MAX_FILENAME];
+        const char* last_slash = strrchr(prefix, '/');
+
+        if (last_slash) {
+            size_t dlen = last_slash - prefix + 1;
+            char rel_dir[MIGFS_MAX_FILENAME];
+            strncpy(rel_dir, prefix, dlen);
+            rel_dir[dlen] = '\0';
+            resolve_shell_path(rel_dir, dir_to_search, sizeof(dir_to_search));
+            strncpy(file_prefix, last_slash + 1, sizeof(file_prefix) - 1);
+            file_prefix[sizeof(file_prefix) - 1] = '\0';
+        } else {
+            strncpy(dir_to_search, shell_cwd, sizeof(dir_to_search) - 1);
+            dir_to_search[sizeof(dir_to_search) - 1] = '\0';
+            strncpy(file_prefix, prefix, sizeof(file_prefix) - 1);
+            file_prefix[sizeof(file_prefix) - 1] = '\0';
+        }
+
+        migfs_dir_item_t items[32];
+        size_t num_items = 0;
+        migfs_get_dir_items(dir_to_search, items, 32, &num_items);
+
+        size_t flen = strlen(file_prefix);
+        for (size_t i = 0; i < num_items && match_count < MAX_AUTO_MATCHES; i++) {
+            if (strncmp(items[i].name, file_prefix, flen) == 0) {
+                if (last_slash) {
+                    size_t dlen = last_slash - prefix + 1;
+                    strncpy(matches[match_count], prefix, dlen);
+                    matches[match_count][dlen] = '\0';
+                    strncat(matches[match_count], items[i].name, MIGFS_MAX_FILENAME - dlen - 1);
+                } else {
+                    strncpy(matches[match_count], items[i].name, MIGFS_MAX_FILENAME - 1);
+                    matches[match_count][MIGFS_MAX_FILENAME - 1] = '\0';
+                }
+                is_dir_match[match_count] = items[i].is_dir;
+                match_count++;
+            }
+        }
+    }
+
+    if (match_count == 0) {
+        return;
+    }
+
+    if (match_count == 1) {
+        char full_match[MIGFS_MAX_FILENAME + 2];
+        strncpy(full_match, matches[0], MIGFS_MAX_FILENAME);
+        if (is_dir_match[0]) {
+            strcat(full_match, "/");
+        } else {
+            strcat(full_match, " ");
+        }
+
+        int match_len = (int)strlen(full_match);
+        int tail_len = *buffer_len - *cursor_pos;
+        if (token_start + match_len + tail_len < BUFFER_SIZE - 1) {
+            for (int i = tail_len; i >= 0; i--) {
+                buffer[token_start + match_len + i] = buffer[*cursor_pos + i];
+            }
+            for (int i = 0; i < match_len; i++) {
+                buffer[token_start + i] = full_match[i];
+            }
+            *buffer_len = token_start + match_len + tail_len;
+            *cursor_pos = token_start + match_len;
+            buffer[*buffer_len] = '\0';
+
+            vga_putc('\r');
+            shell_print_prompt();
+            vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+            vga_puts(buffer);
+        }
+    } else {
+        char common[MIGFS_MAX_FILENAME];
+        strncpy(common, matches[0], MIGFS_MAX_FILENAME - 1);
+        common[MIGFS_MAX_FILENAME - 1] = '\0';
+        int common_len = (int)strlen(common);
+
+        for (int m = 1; m < match_count; m++) {
+            int j = 0;
+            while (j < common_len && matches[m][j] != '\0' && matches[m][j] == common[j]) {
+                j++;
+            }
+            common_len = j;
+            common[common_len] = '\0';
+        }
+
+        if (common_len > token_len) {
+            int tail_len = *buffer_len - *cursor_pos;
+            if (token_start + common_len + tail_len < BUFFER_SIZE - 1) {
+                for (int i = tail_len; i >= 0; i--) {
+                    buffer[token_start + common_len + i] = buffer[*cursor_pos + i];
+                }
+                for (int i = 0; i < common_len; i++) {
+                    buffer[token_start + i] = common[i];
+                }
+                *buffer_len = token_start + common_len + tail_len;
+                *cursor_pos = token_start + common_len;
+                buffer[*buffer_len] = '\0';
+            }
+        }
+
+        vga_putc('\n');
+        for (int m = 0; m < match_count; m++) {
+            if (is_dir_match[m]) {
+                vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+                vga_puts(matches[m]);
+                vga_putc('/');
+            } else if (strstr(matches[m], ".gb") || strstr(matches[m], ".wad")) {
+                vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+                vga_puts(matches[m]);
+            } else {
+                vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+                vga_puts(matches[m]);
+            }
+            vga_puts("  ");
+        }
+        vga_putc('\n');
+
+        shell_print_prompt();
+        vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+        vga_puts(buffer);
     }
 }
 
@@ -331,21 +559,6 @@ static void print_memtest(void) {
     vga_puts("[SUCESSO] Teste de Gerenciamento de Memoria concluido com 100% de exito!\n");
 }
 
-static char shell_cwd[MIGFS_MAX_FILENAME] = "/";
-
-static void shell_print_prompt(void) {
-    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    vga_puts("migOS:");
-    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-    vga_puts(shell_cwd);
-    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
-    vga_puts("> ");
-}
-
-static void resolve_shell_path(const char* rel_or_abs, char* out, size_t out_size) {
-    migfs_path_combine(shell_cwd, rel_or_abs, out, out_size);
-}
-
 static void cmd_pwd(void) {
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     vga_puts(shell_cwd);
@@ -549,7 +762,9 @@ static void cmd_ls(const char* args) {
         // Listagem global flat de todos os arquivos
         vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
         vga_puts("Todos os Arquivos no Disco ATA Persistente (MIGFS):\n");
-        vga_puts("--------------------------------------------------\n");
+        vga_puts("----------------------------------------------------------------------\n");
+        vga_puts("Nome                  Tipo    Tamanho     Modificado        Attr\n");
+        vga_puts("----------------------------------------------------------------------\n");
         for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
             migfs_file_t* f = migfs_get_file_by_index(i);
             if (f) {
@@ -557,18 +772,32 @@ static void cmd_ls(const char* args) {
                 vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
                 vga_puts("  ");
                 vga_puts(f->name);
-                for (size_t p = strlen(f->name); p < 24; p++) vga_putc(' ');
+                for (size_t p = strlen(f->name); p < 20; p++) vga_putc(' ');
 
                 if (f->flags & MIGFS_FILE_DIRECTORY) {
                     vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
-                    vga_puts("[DIR]       ");
+                    vga_puts("<DIR>  ");
+                    vga_set_color(VGA_COLOR_DARK_GREY, VGA_COLOR_BLACK);
+                    vga_puts("-           ");
                 } else {
+                    vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
+                    vga_puts("<FILE> ");
                     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
                     itoa((int)f->size, buf, 10);
                     vga_puts(buf);
                     vga_puts(" B");
                     for (size_t p = strlen(buf) + 2; p < 12; p++) vga_putc(' ');
                 }
+
+                char dt[24];
+                if (f->modified_time > 0) {
+                    rtc_format_epoch_short(f->modified_time, dt, sizeof(dt));
+                } else {
+                    strcpy(dt, "--/-- --:--");
+                }
+                vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+                vga_puts(dt);
+                for (size_t p = strlen(dt); p < 16; p++) vga_putc(' ');
 
                 if (f->flags & MIGFS_FILE_READONLY) {
                     vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
@@ -580,7 +809,7 @@ static void cmd_ls(const char* args) {
             }
         }
         vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-        vga_puts("--------------------------------------------------\n");
+        vga_puts("----------------------------------------------------------------------\n");
         vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
         itoa((int)file_count, buf, 10);
         vga_puts("Total: ");
@@ -599,8 +828,8 @@ static void cmd_ls(const char* args) {
     vga_putc('\n');
 
     vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    vga_puts("Nome                      Tipo        Tamanho     Atributos\n");
-    vga_puts("-----------------------------------------------------------\n");
+    vga_puts("Nome                  Tipo    Tamanho     Modificado        Attr\n");
+    vga_puts("----------------------------------------------------------------------\n");
 
     static migfs_dir_item_t ls_items[32];
     size_t item_count = 0;
@@ -612,44 +841,51 @@ static void cmd_ls(const char* args) {
             vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
             vga_puts("  ");
             vga_puts(ls_items[i].name);
-            for (size_t p = strlen(ls_items[i].name); p < 24; p++) vga_putc(' ');
+            for (size_t p = strlen(ls_items[i].name); p < 20; p++) vga_putc(' ');
 
             vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-            vga_puts("<DIR>       ");
+            vga_puts("<DIR>  ");
 
             vga_set_color(VGA_COLOR_DARK_GREY, VGA_COLOR_BLACK);
             vga_puts("-           ");
-
-            vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-            vga_puts("[RW]\n");
         } else {
             file_count++;
             vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
             vga_puts("  ");
             vga_puts(ls_items[i].name);
-            for (size_t p = strlen(ls_items[i].name); p < 24; p++) vga_putc(' ');
+            for (size_t p = strlen(ls_items[i].name); p < 20; p++) vga_putc(' ');
 
             vga_set_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK);
-            vga_puts("<FILE>      ");
+            vga_puts("<FILE> ");
 
             vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
             itoa((int)ls_items[i].size, buf, 10);
             vga_puts(buf);
             vga_puts(" B");
             for (size_t p = strlen(buf) + 2; p < 12; p++) vga_putc(' ');
+        }
 
-            if (ls_items[i].flags & MIGFS_FILE_READONLY) {
-                vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
-                vga_puts("[RO]\n");
-            } else {
-                vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-                vga_puts("[RW]\n");
-            }
+        char dt[24];
+        if (ls_items[i].modified_time > 0) {
+            rtc_format_epoch_short(ls_items[i].modified_time, dt, sizeof(dt));
+        } else {
+            strcpy(dt, "--/-- --:--");
+        }
+        vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        vga_puts(dt);
+        for (size_t p = strlen(dt); p < 16; p++) vga_putc(' ');
+
+        if (ls_items[i].flags & MIGFS_FILE_READONLY) {
+            vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+            vga_puts("[RO]\n");
+        } else {
+            vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+            vga_puts("[RW]\n");
         }
     }
 
     vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-    vga_puts("-----------------------------------------------------------\n");
+    vga_puts("----------------------------------------------------------------------\n");
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
     itoa((int)file_count, buf, 10);
     vga_puts("Total: ");
@@ -708,23 +944,22 @@ static void cmd_touch(const char* args) {
     char target[MIGFS_MAX_FILENAME];
     resolve_shell_path(args, target, sizeof(target));
 
-    if (migfs_exists(target)) {
-        vga_set_color(VGA_COLOR_LIGHT_BROWN, VGA_COLOR_BLACK);
-        vga_puts("touch: arquivo '");
-        vga_puts(args);
-        vga_puts("' ja existe.\n");
-        return;
-    }
-
-    int ret = migfs_create(target, "", 0, 0);
+    int existed = migfs_exists(target);
+    int ret = migfs_touch(target);
     if (ret == 0) {
         vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-        vga_puts("Arquivo '");
-        vga_puts(target);
-        vga_puts("' criado com sucesso.\n");
+        if (existed) {
+            vga_puts("Timestamp do arquivo '");
+            vga_puts(target);
+            vga_puts("' atualizado para o horario atual.\n");
+        } else {
+            vga_puts("Arquivo '");
+            vga_puts(target);
+            vga_puts("' criado com sucesso.\n");
+        }
     } else {
         vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
-        vga_puts("Erro ao criar arquivo.\n");
+        vga_puts("Erro ao executar touch no arquivo.\n");
     }
 }
 
@@ -803,6 +1038,288 @@ static void cmd_rm(const char* args) {
     }
 }
 
+static void cmd_echo(const char* args) {
+    while (*args == ' ') args++;
+    if (*args == '"' || *args == '\'') {
+        char quote = *args++;
+        while (*args && *args != quote) {
+            vga_putc(*args++);
+        }
+    } else {
+        vga_puts(args);
+    }
+    vga_putc('\n');
+}
+
+static void cmd_free(void) {
+    char buf[32];
+    size_t total_ram   = pmm_get_total_memory();
+    size_t used_ram    = pmm_get_used_memory();
+    size_t free_ram    = pmm_get_free_memory();
+    size_t heap_total  = kheap_get_total_bytes();
+    size_t heap_used   = kheap_get_used_bytes();
+    size_t heap_free   = kheap_get_free_bytes();
+    size_t heap_allocs = kheap_get_alloc_count();
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("               total        usado        livre      detalhes\n");
+    vga_puts("Mem (PMM):    ");
+    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    itoa((int)(total_ram / (1024 * 1024)), buf, 10);
+    vga_puts(buf); vga_puts(" MB       ");
+    itoa((int)(used_ram / 1024), buf, 10);
+    vga_puts(buf); vga_puts(" KB     ");
+    itoa((int)(free_ram / (1024 * 1024)), buf, 10);
+    vga_puts(buf); vga_puts(" MB     frames de 4KB\n");
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("Heap Kernel:  ");
+    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    itoa((int)(heap_total / 1024), buf, 10);
+    vga_puts(buf); vga_puts(" KB     ");
+    itoa((int)heap_used, buf, 10);
+    vga_puts(buf); vga_puts(" B      ");
+    itoa((int)(heap_free / 1024), buf, 10);
+    vga_puts(buf); vga_puts(" KB     ");
+    itoa((int)heap_allocs, buf, 10);
+    vga_puts(buf); vga_puts(" blocos alocados\n");
+}
+
+static void cmd_df(void) {
+    char buf[32];
+    size_t used_bytes = migfs_get_total_used_bytes();
+    size_t files_cnt  = migfs_get_file_count();
+    size_t total_kb   = 4096; // 4MB RAMDisk
+    size_t used_kb    = used_bytes / 1024;
+    if (used_kb == 0 && used_bytes > 0) used_kb = 1;
+    size_t free_kb    = (total_kb > used_kb) ? (total_kb - used_kb) : 0;
+    int use_percent   = (int)((used_kb * 100) / total_kb);
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("Sistema-Arq     1K-Blocos      Usado  Disponivel Uso%  Montado em\n");
+    vga_puts("-----------------------------------------------------------------\n");
+    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    vga_puts("/dev/ramdisk         4096       ");
+    itoa((int)used_kb, buf, 10);
+    vga_puts(buf);
+    for (size_t p = strlen(buf); p < 6; p++) vga_putc(' ');
+    vga_puts("      ");
+    itoa((int)free_kb, buf, 10);
+    vga_puts(buf);
+    for (size_t p = strlen(buf); p < 6; p++) vga_putc(' ');
+    vga_puts(" ");
+    itoa(use_percent, buf, 10);
+    vga_puts(buf);
+    vga_puts("%   / (MIGFS)\n");
+
+    vga_puts("/dev/ata0           16384       ");
+    itoa((int)used_kb, buf, 10);
+    vga_puts(buf);
+    for (size_t p = strlen(buf); p < 6; p++) vga_putc(' ');
+    vga_puts("      ");
+    itoa((int)(16384 - used_kb), buf, 10);
+    vga_puts(buf);
+    for (size_t p = strlen(buf); p < 6; p++) vga_putc(' ');
+    vga_puts("  ");
+    itoa((int)((used_kb * 100) / 16384), buf, 10);
+    vga_puts(buf);
+    vga_puts("%   /mnt/ata\n");
+
+    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+    vga_puts("Status: ");
+    itoa((int)files_cnt, buf, 10);
+    vga_puts(buf);
+    vga_puts(" arquivos/pastas ativos no RAMDisk persistente.\n");
+}
+
+static void cmd_date(void) {
+    char buf[64];
+    rtc_time_t rt;
+    rtc_get_time(&rt);
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("Data e Hora Real (CMOS RTC): ");
+    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+    rtc_format_datetime(buf, sizeof(buf));
+    vga_puts(buf);
+    vga_putc('\n');
+
+    unsigned int sec = get_uptime();
+    unsigned int ticks = timer_get_ticks();
+    unsigned int hrs = sec / 3600;
+    unsigned int min = (sec % 3600) / 60;
+    unsigned int s = sec % 60;
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("Tempo Ativo (migOS Uptime):  ");
+    vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+    if (hrs < 10) vga_putc('0');
+    itoa((int)hrs, buf, 10);
+    vga_puts(buf);
+    vga_putc(':');
+    if (min < 10) vga_putc('0');
+    itoa((int)min, buf, 10);
+    vga_puts(buf);
+    vga_putc(':');
+    if (s < 10) vga_putc('0');
+    itoa((int)s, buf, 10);
+    vga_puts(buf);
+
+    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    vga_puts(" (");
+    itoa((int)ticks, buf, 10);
+    vga_puts(buf);
+    vga_puts(" ticks do PIT @ 100 Hz)\n");
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("Timestamp UNIX Atual:        ");
+    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    itoa((int)rtc_get_unix_timestamp(), buf, 10);
+    vga_puts(buf);
+    vga_puts(" s\n");
+}
+
+static void cmd_rtc(void) {
+    rtc_time_t rt;
+    rtc_get_time(&rt);
+    char buf[64];
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("==================================================\n");
+    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+    vga_puts("    Controlador CMOS / Real-Time Clock (RTC)      \n");
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("==================================================\n");
+
+    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    vga_puts("  Portas I/O:        0x70 (Endereco) / 0x71 (Dados)\n");
+    vga_puts("  Formato CMOS:      Decodificacao BCD Ativa\n");
+    vga_puts("  Modo de Horario:   24 Horas\n");
+
+    rtc_format_date(buf, sizeof(buf));
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("  Data Decodificada: ");
+    vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+    vga_puts(buf);
+    vga_putc('\n');
+
+    rtc_format_time_full(buf, sizeof(buf));
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("  Hora Decodificada: ");
+    vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+    vga_puts(buf);
+    vga_putc('\n');
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("  Timestamp UNIX:    ");
+    vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    itoa((int)rtc_get_unix_timestamp(), buf, 10);
+    vga_puts(buf);
+    vga_puts(" segundos\n");
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("  Status Bateria:    ");
+    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+    vga_puts("OK (Energia RTC Nominal)\n");
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("==================================================\n");
+}
+
+static void cmd_beep(const char* args) {
+    while (*args == ' ') args++;
+    uint32_t freq = 440;
+    uint32_t dur = 100;
+
+    if (*args != '\0') {
+        freq = (uint32_t)atoi(args);
+        while (*args >= '0' && *args <= '9') args++;
+        while (*args == ' ') args++;
+        if (*args != '\0') {
+            dur = (uint32_t)atoi(args);
+        }
+    }
+
+    if (freq == 0) freq = 440;
+    if (dur == 0) dur = 100;
+
+    vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+    vga_puts("PC Speaker: emitindo tom de ");
+    char b[32];
+    itoa((int)freq, b, 10);
+    vga_puts(b);
+    vga_puts(" Hz por ");
+    itoa((int)dur, b, 10);
+    vga_puts(b);
+    vga_puts(" ms...\n");
+
+    sound_beep(freq, dur);
+}
+
+static void cmd_sfx(const char* args) {
+    while (*args == ' ') args++;
+    if (*args == '\0') {
+        vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        vga_puts("Efeitos Sonoros Disponiveis (SFX):\n");
+        vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+        vga_puts("  sfx startup  - Mac OS Classic Startup Chime (Fa Maior)\n");
+        vga_puts("  sfx alert    - Beep de Alerta da GUI / Sosumi\n");
+        vga_puts("  sfx click    - Clique de Interface de Usuario\n");
+        vga_puts("  sfx trash    - Esvaziamento de Lixeira / Acao Destrutiva\n");
+        vga_puts("  sfx success  - Confirmacao de Sucesso / Save Game\n");
+        return;
+    }
+
+    if (strcmp(args, "startup") == 0 || strcmp(args, "chime") == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("Reproduzindo Startup Chime...\n");
+        sound_play_sfx(SFX_STARTUP);
+    } else if (strcmp(args, "alert") == 0 || strcmp(args, "sosumi") == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("Reproduzindo Beep de Alerta (Sosumi)...\n");
+        sound_play_sfx(SFX_ALERT);
+    } else if (strcmp(args, "click") == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("Reproduzindo Clique de Interface...\n");
+        sound_play_sfx(SFX_CLICK);
+    } else if (strcmp(args, "trash") == 0 || strcmp(args, "delete") == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("Reproduzindo SFX Trash / Destrutivo...\n");
+        sound_play_sfx(SFX_TRASH);
+    } else if (strcmp(args, "success") == 0 || strcmp(args, "save") == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("Reproduzindo SFX Confirmacao de Sucesso...\n");
+        sound_play_sfx(SFX_SUCCESS);
+    } else {
+        vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+        vga_puts("Efeito sonoro desconhecido. Digite 'sfx' para listar.\n");
+    }
+}
+
+static void cmd_mute(const char* args) {
+    while (*args == ' ') args++;
+    if (strcmp(args, "on") == 0 || strcmp(args, "1") == 0) {
+        sound_set_mute(1);
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("Audio do PC Speaker: SILENCIADO [MUTE ON]\n");
+    } else if (strcmp(args, "off") == 0 || strcmp(args, "0") == 0) {
+        sound_set_mute(0);
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("Audio do PC Speaker: ATIVADO [MUTE OFF]\n");
+    } else {
+        int m = sound_is_muted();
+        sound_set_mute(!m);
+        if (!m) {
+            vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+            vga_puts("Audio do PC Speaker: SILENCIADO [MUTE ON]\n");
+        } else {
+            vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+            vga_puts("Audio do PC Speaker: ATIVADO [MUTE OFF]\n");
+            sound_play_sfx(SFX_CLICK);
+        }
+    }
+}
+
 void shell_init(void) {
     has_pending_cmd = 0;
     pending_cmd[0] = '\0';
@@ -828,54 +1345,118 @@ void shell_execute(const char* command) {
         return;
     }
 
+    // Reexecucao de comando do historico por indice: !1, !2, etc.
+    if (clean_cmd[0] == '!' && clean_cmd[1] >= '0' && clean_cmd[1] <= '9') {
+        int idx = atoi(clean_cmd + 1);
+        if (idx >= 1 && idx <= history_count) {
+            const char* prev = history[idx - 1];
+            vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+            vga_puts("-> ");
+            vga_puts(prev);
+            vga_putc('\n');
+            shell_execute(prev);
+            return;
+        } else {
+            vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+            vga_puts("Indice do historico fora do alcance.\n");
+            shell_print_prompt();
+            return;
+        }
+    }
+
     shell_history_add(clean_cmd);
 
     const char* cmd = clean_cmd;
 
-    if (strcmp(cmd, "help") == 0) {
+    if (strcmp(cmd, "help") == 0 || strcmp(cmd, "?") == 0) {
         vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
-        vga_puts("Comandos do Gerenciador de Arquivos & Sistema migOS:\n");
-        vga_puts("  ls [pasta]          - Lista arquivos e pastas (use 'ls -a' para todos)\n");
-        vga_puts("  cd <pasta>          - Navega entre diretorios ('cd ..' para voltar)\n");
-        vga_puts("  pwd                 - Exibe o caminho do diretorio de trabalho atual\n");
-        vga_puts("  mkdir <pasta>       - Cria uma nova pasta/diretorio no MIGFS\n");
-        vga_puts("  rmdir <pasta>       - Remove uma pasta vazia\n");
-        vga_puts("  mv <orig> <dest>    - Move ou renomeia um arquivo ou pasta\n");
-        vga_puts("  cp <orig> <dest>    - Copia um arquivo para novo local ou nome\n");
+        vga_puts("==================== CENTRAL DE AJUDA migOS ====================\n");
+
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("[1] ARQUIVOS E DIRETORIOS:\n");
+        vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+        vga_puts("  ls / dir [-a]       - Lista conteudo da pasta atual ou global\n");
+        vga_puts("  cd <pasta>          - Navega entre pastas ('cd ..' para voltar)\n");
+        vga_puts("  pwd                 - Exibe o caminho do diretorio atual\n");
+        vga_puts("  mkdir / md <pasta>  - Cria uma nova pasta no MIGFS\n");
+        vga_puts("  rmdir / rd <pasta>  - Remove uma pasta vazia\n");
+        vga_puts("  mv <orig> <dest>    - Move ou renomeia arquivo/pasta\n");
+        vga_puts("  cp <orig> <dest>    - Copia um arquivo para novo local\n");
         vga_puts("  touch <arquivo>     - Cria um novo arquivo vazio\n");
-        vga_puts("  cat <arquivo>       - Exibe o conteudo de um arquivo no terminal\n");
-        vga_puts("  write <arq> <texto> - Escreve texto em um arquivo\n");
-        vga_puts("  rm <arquivo>        - Remove um arquivo do disco\n");
-        vga_puts("  edit / nano <arq>   - Abre o Editor de Texto Visual no Terminal\n");
-        vga_puts("  run / exec <arq.txt>- Executa e interpreta scripts .txt\n");
-        vga_puts("  calc <expressao>    - Avalia expressao matematica (ex: calc 10+20*3)\n");
-        vga_puts("  gui / desktop       - Inicia a Interface Grafica Mac OS System 7 Classic\n");
-        vga_puts("  gameboy / gb <.gb>  - Inicia o Emulador de Game Boy (Peanut-GB)\n");
-        vga_puts("  sync                - Sincroniza dados com o Disco ATA\n");
-        vga_puts("  meminfo / memtest   - Exibe status da memoria e teste de heap\n");
-        vga_puts("  clear               - Limpa a tela do terminal\n");
-        vga_puts("  reboot              - Reinicia a maquina virtual\n");
-    } else if (strcmp(cmd, "clear") == 0) {
+        vga_puts("  cat / type <arq>    - Exibe conteudo de arquivo no terminal\n");
+        vga_puts("  write <arq> <txt>   - Escreve texto direto em um arquivo\n");
+        vga_puts("  rm / del <arquivo>  - Remove um arquivo do disco\n");
+        vga_puts("  sync                - Sincroniza dados com o Disco ATA primario\n\n");
+
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("[2] EDICAO, SCRIPTS E CALCULADORA:\n");
+        vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+        vga_puts("  nano / edit <arq>   - Editor de texto visual interativo no CLI\n");
+        vga_puts("  run / exec <arq.txt>- Executa scripts do interpretador migOS\n");
+        vga_puts("  calc <expressao>    - Avaliador matematico (ex: calc (10+5)*2)\n");
+        vga_puts("  echo <texto>        - Imprime mensagem na tela\n\n");
+
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("[3] JOGOS E INTERFACE GRAFICA:\n");
+        vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+        vga_puts("  gameboy / gb <.gb>  - Emulador Peanut-GB (ex: pokemon, gameboy)\n");
+        vga_puts("  gbinfo <.gb>        - Exibe cabecalho e metadados da ROM\n");
+        vga_puts("  gui / desktop       - Inicia Interface Grafica Mac OS System 7\n");
+        vga_puts("  snake / matrix      - Jogos e efeitos visuais no terminal\n\n");
+
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("[4] SISTEMA, AUDIO, DIAGNOSTICO E ATALHOS:\n");
+        vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+        vga_puts("  beep [freq] [dur]   - Emite tom sonoro no PC Speaker (ex: beep 440 200)\n");
+        vga_puts("  sfx <nome>          - Toca efeito sonoro (startup, alert, click, trash, success)\n");
+        vga_puts("  mute [on/off]       - Silencia ou ativa o audio do PC Speaker\n");
+        vga_puts("  history             - Exibe historico recente (use !<num> para rodar)\n");
+        vga_puts("  whoami / hostname   - Exibe usuario e nome da maquina\n");
+        vga_puts("  free / meminfo      - Status da memoria fisica PMM e Heap Kernel\n");
+        vga_puts("  df                  - Uso de disco do RAMDisk MIGFS e ATA\n");
+        vga_puts("  uptime / date / time- Tempo de execucao do kernel e timer PIT\n");
+        vga_puts("  rtc / clock / cmos  - Diagnostico do hardware CMOS/RTC e bateria\n");
+        vga_puts("  clear / cls         - Limpa a tela do terminal\n");
+        vga_puts("  reboot              - Reinicia a maquina com seguranca\n");
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("  Atalhos: [TAB] Auto-completar | [Ctrl+C] Cancela | [Ctrl+L] Limpa\n");
+        vga_puts("           [Setas] Navegacao/Historico | [Ctrl+U/K/W] Edicao de linha\n");
+        vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        vga_puts("=================================================================\n");
+    } else if (strcmp(cmd, "clear") == 0 || strcmp(cmd, "cls") == 0) {
         vga_clear();
     } else if (strncmp(cmd, "ls", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
         cmd_ls(cmd + 2);
+    } else if (strncmp(cmd, "dir", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\0')) {
+        cmd_ls(cmd + 3);
     } else if (strcmp(cmd, "pwd") == 0 || (strncmp(cmd, "pwd", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\0'))) {
         cmd_pwd();
     } else if (strncmp(cmd, "cd", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
         cmd_cd(cmd + 2);
     } else if (strncmp(cmd, "mkdir", 5) == 0 && (cmd[5] == ' ' || cmd[5] == '\0')) {
         cmd_mkdir(cmd + 5);
+    } else if (strncmp(cmd, "md", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
+        cmd_mkdir(cmd + 2);
     } else if (strncmp(cmd, "rmdir", 5) == 0 && (cmd[5] == ' ' || cmd[5] == '\0')) {
         cmd_rmdir(cmd + 5);
+    } else if (strncmp(cmd, "rd", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
+        cmd_rmdir(cmd + 2);
     } else if (strncmp(cmd, "mv", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
         cmd_mv(cmd + 2);
     } else if (strncmp(cmd, "cp", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
         cmd_cp(cmd + 2);
     } else if (strncmp(cmd, "cat", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\0')) {
         cmd_cat(cmd + 3);
+    } else if (strncmp(cmd, "type", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\0')) {
+        cmd_cat(cmd + 4);
+    } else if (strncmp(cmd, "echo", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\0')) {
+        cmd_echo(cmd + 4);
     } else if ((strncmp(cmd, "edit", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\0')) ||
-               (strncmp(cmd, "nano", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\0'))) {
-        const char* fname = cmd + 4;
+               (strncmp(cmd, "nano", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\0')) ||
+               (strncmp(cmd, "vi", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) ||
+               (strncmp(cmd, "vim", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\0'))) {
+        const char* fname = cmd;
+        while (*fname != ' ' && *fname != '\0') fname++;
         while (*fname == ' ') fname++;
         char target[MIGFS_MAX_FILENAME];
         resolve_shell_path(fname, target, sizeof(target));
@@ -953,6 +1534,34 @@ void shell_execute(const char* command) {
         cmd_write(cmd + 5);
     } else if (strncmp(cmd, "rm", 2) == 0 && (cmd[2] == ' ' || cmd[2] == '\0')) {
         cmd_rm(cmd + 2);
+    } else if (strncmp(cmd, "del", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\0')) {
+        cmd_rm(cmd + 3);
+    } else if (strncmp(cmd, "unlink", 6) == 0 && (cmd[6] == ' ' || cmd[6] == '\0')) {
+        cmd_rm(cmd + 6);
+    } else if (strcmp(cmd, "history") == 0) {
+        shell_history_list();
+    } else if (strcmp(cmd, "whoami") == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("miguel (root / kernel space)\n");
+    } else if (strcmp(cmd, "hostname") == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        vga_puts("migOS\n");
+    } else if (strcmp(cmd, "free") == 0) {
+        cmd_free();
+    } else if (strcmp(cmd, "df") == 0) {
+        cmd_df();
+    } else if (strcmp(cmd, "date") == 0 || strcmp(cmd, "time") == 0) {
+        cmd_date();
+    } else if (strcmp(cmd, "rtc") == 0 || strcmp(cmd, "clock") == 0 || strcmp(cmd, "cmos") == 0) {
+        cmd_rtc();
+    } else if (strncmp(cmd, "beep", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\0')) {
+        cmd_beep(cmd + 4);
+    } else if (strncmp(cmd, "sfx", 3) == 0 && (cmd[3] == ' ' || cmd[3] == '\0')) {
+        cmd_sfx(cmd + 3);
+    } else if (strncmp(cmd, "mute", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\0')) {
+        cmd_mute(cmd + 4);
+    } else if (strncmp(cmd, "sound", 5) == 0 && (cmd[5] == ' ' || cmd[5] == '\0')) {
+        cmd_mute(cmd + 5);
     } else if (strcmp(cmd, "meminfo") == 0) {
         print_meminfo();
     } else if (strcmp(cmd, "memtest") == 0) {
@@ -1007,7 +1616,7 @@ void shell_execute(const char* command) {
             vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
             vga_puts("Comando desconhecido: '");
             vga_puts(cmd);
-            vga_puts("'\n");
+            vga_puts("'. Digite 'help' para ver os comandos disponiveis.\n");
         }
     }
 
