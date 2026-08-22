@@ -54,6 +54,7 @@ void keyboard_clear_key(void);
 
 // Modos de captura direta para DOOM, Jogos, Editor CLI e GUI
 void keyboard_set_doom_mode(int enabled);
+int  keyboard_is_doom_mode(void);
 int  keyboard_get_doom_key(int* pressed, unsigned char* doom_key);
 int  keyboard_get_event(key_event_t* event);
 

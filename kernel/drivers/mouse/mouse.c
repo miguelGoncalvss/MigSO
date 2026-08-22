@@ -1,5 +1,6 @@
 #include <drivers/mouse.h>
 #include <drivers/vga.h>
+#include <drivers/keyboard.h>
 #include <arch/i386/io.h>
 #include <arch/i386/pic.h>
 #include <arch/i386/idt.h>
@@ -72,7 +73,17 @@ void mouse_init(void) {
     mouse_write(0xF6);
     mouse_read(); // ACK (0xFA)
 
-    // 4. Habilita o envio continuo de pacotes de dados (Enable Data Reporting)
+    // 4. Sequencia magica para ativar Mouse com Scroll Wheel (IntelliMouse)
+    mouse_write(0xF3); mouse_read(); mouse_write(200); mouse_read();
+    mouse_write(0xF3); mouse_read(); mouse_write(100); mouse_read();
+    mouse_write(0xF3); mouse_read(); mouse_write(80);  mouse_read();
+    mouse_write(0xF2); mouse_read();
+    unsigned char mouse_id = mouse_read();
+    if (mouse_id == 3 || mouse_id == 4) {
+        has_wheel = 1;
+    }
+
+    // 5. Habilita o envio continuo de pacotes de dados (Enable Data Reporting)
     mouse_write(0xF4);
     mouse_read(); // ACK (0xFA)
 
@@ -161,7 +172,31 @@ static void process_mouse_packet(void) {
     if (cur_mouse_state.y < mouse_bound_min_y) cur_mouse_state.y = mouse_bound_min_y;
     if (cur_mouse_state.y > mouse_bound_max_y) cur_mouse_state.y = mouse_bound_max_y;
 
-    cur_mouse_state.scroll_delta = 0;
+    if (has_wheel) {
+        signed char z = (signed char)mouse_packet[3];
+        cur_mouse_state.scroll_delta = z;
+        // Rola o terminal APENAS se estiver no modo CLI normal
+        if (!keyboard_is_doom_mode()) {
+            if (z > 0) {
+                vga_scroll_history_up(3);
+            } else if (z < 0) {
+                vga_scroll_history_down(3);
+            }
+        }
+    } else {
+        cur_mouse_state.scroll_delta = 0;
+    }
+
+    // Clique na barra lateral de rolagem do terminal (APENAS se estiver no modo CLI normal)
+    if (!keyboard_is_doom_mode() && cur_mouse_state.left_button) {
+        if (cur_mouse_state.x >= 78) {
+            if (cur_mouse_state.y == 0) {
+                vga_scroll_history_up(2);
+            } else if (cur_mouse_state.y >= 28) {
+                vga_scroll_history_down(2);
+            }
+        }
+    }
 }
 
 void mouse_handler_c(void) {
@@ -183,6 +218,14 @@ void mouse_handler_c(void) {
                 mouse_cycle = 2;
             } else if (mouse_cycle == 2) {
                 mouse_packet[2] = b;
+                if (has_wheel) {
+                    mouse_cycle = 3;
+                } else {
+                    mouse_cycle = 0;
+                    process_mouse_packet();
+                }
+            } else if (mouse_cycle == 3) {
+                mouse_packet[3] = b;
                 mouse_cycle = 0;
                 process_mouse_packet();
             }

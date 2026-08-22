@@ -148,6 +148,8 @@ $Core_Sources = @(
     @{ Src = "kernel\drivers\vga\vga.c";        Obj = "$BuildDir\vga.o" },
     @{ Src = "kernel\drivers\vga\vga_mode13.c"; Obj = "$BuildDir\vga_mode13.o" },
     @{ Src = "kernel\drivers\disk\ata.c";       Obj = "$BuildDir\ata.o" },
+    @{ Src = "kernel\drivers\rtc\rtc.c";        Obj = "$BuildDir\rtc.o" },
+    @{ Src = "kernel\drivers\sound\sound.c";    Obj = "$BuildDir\sound.o" },
     @{ Src = "kernel\drivers\keyboard\keyboard.c"; Obj = "$BuildDir\keyboard.o" },
     @{ Src = "kernel\drivers\mouse\mouse.c";       Obj = "$BuildDir\mouse.o" },
     @{ Src = "kernel\gui\gui.c";                   Obj = "$BuildDir\gui.o" },
@@ -155,6 +157,7 @@ $Core_Sources = @(
     @{ Src = "libc\string.c";                   Obj = "$BuildDir\string.o" },
     @{ Src = "libc\stdlib.c";                   Obj = "$BuildDir\stdlib.o" },
     @{ Src = "libc\stdio.c";                    Obj = "$BuildDir\stdio.o" },
+    @{ Src = "libc\time.c";                     Obj = "$BuildDir\time.o" },
     @{ Src = "shell\shell.c";                   Obj = "$BuildDir\shell.o" }
 )
 
@@ -187,6 +190,8 @@ $LinkObjects = @(
     "$BuildDir\vga.o",
     "$BuildDir\vga_mode13.o",
     "$BuildDir\ata.o",
+    "$BuildDir\rtc.o",
+    "$BuildDir\sound.o",
     "$BuildDir\keyboard.o",
     "$BuildDir\mouse.o",
     "$BuildDir\gui.o",
@@ -194,6 +199,7 @@ $LinkObjects = @(
     "$BuildDir\string.o",
     "$BuildDir\stdlib.o",
     "$BuildDir\stdio.o",
+    "$BuildDir\time.o",
     "$BuildDir\shell.o"
 )
 
@@ -393,11 +399,14 @@ foreach ($f in $FilesToPack) {
     [System.Array]::Copy($NameEnc, 0, $TableBytes, $EntryOff, $CopyNameLen)
     $TableBytes[$EntryOff + $CopyNameLen] = 0
     
+    $NowEpoch = [uint32][System.DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
     [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]$fSize), 0, $TableBytes, $EntryOff + 32, 4)
     [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]$fFlags), 0, $TableBytes, $EntryOff + 36, 4)
     [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]$CurLba), 0, $TableBytes, $EntryOff + 40, 4)
     [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]$fSectors), 0, $TableBytes, $EntryOff + 44, 4)
     [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]1), 0, $TableBytes, $EntryOff + 48, 4)
+    [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]$NowEpoch), 0, $TableBytes, $EntryOff + 52, 4)
+    [System.Array]::Copy([System.BitConverter]::GetBytes([uint32]$NowEpoch), 0, $TableBytes, $EntryOff + 56, 4)
     
     $DataOffset = $CurLba * 512
     if ($DataOffset + $fSize -le $DiskTotalSize) {
@@ -463,7 +472,16 @@ if (-not $QemuExec) {
 }
 
 if ($QemuExec) {
-    & $QemuExec -m 64M -vga std -drive format=raw,file="$PSScriptRoot\migOS.img" -rtc base=localtime
+    # Habilita o backend de audio (DirectSound / dsound) e conecta o PC Speaker virtual no QEMU
+    $QemuArgs = @(
+        "-m", "64M",
+        "-vga", "std",
+        "-drive", "format=raw,file=$PSScriptRoot\migOS.img",
+        "-rtc", "base=localtime",
+        "-audiodev", "dsound,id=snd0",
+        "-machine", "pcspk-audiodev=snd0"
+    )
+    & $QemuExec @QemuArgs
 } else {
     Write-Warning "[AVISO] Executavel do QEMU nao encontrado nos caminhos padrao. Imagem 'migOS.img' gerada e pronta para execucao."
 }

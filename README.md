@@ -26,8 +26,11 @@ Sistema operacional monolitico de 32 bits desenvolvido do zero para a arquitetur
   - [13. Interpretador e Executor de Scripts .txt](#13-interpretador-e-executor-de-scripts-txt)
   - [14. Emulador de Game Boy & Jogo Pokémon (Peanut-GB Bare-Metal)](#14-emulador-de-game-boy--jogo-pokémon-peanut-gb-bare-metal)
 - [Emulador de Game Boy & Jogo Pokémon no migOS](#emulador-de-game-boy--jogo-pokémon-no-migos)
+- [Driver de Relógio em Tempo Real (CMOS / RTC) & Timestamps no MIGFS](#driver-de-relógio-em-tempo-real-cmos--rtc--timestamps-no-migfs)
+- [Driver de Áudio para PC Speaker (PIT 8254) & Efeitos Sonoros (SFX)](#driver-de-áudio-para-pc-speaker-pit-8254--efeitos-sonoros-sfx)
 - [Sistema de Arquivos Hierárquico MIGFS & Persistência em Disco](#sistema-de-arquivos-hierárquico-migfs--persistência-em-disco)
 - [Interpretador de Scripts & Calculadora Matemática](#interpretador-de-scripts--calculadora-matemática)
+- [Terminal Avançado, Scrollbar & Ergonomia Linux](#terminal-avancado-scrollbar--ergonomia-linux)
 - [Ciclo de Inicializacao (Boot Flow)](#ciclo-de-inicializacao-boot-flow)
 - [Mapa de Memoria Fisica](#mapa-de-memoria-fisica)
 - [Arquitetura do Heap Dinamico (KHeap)](#arquitetura-do-heap-dinamico-kheap)
@@ -41,7 +44,7 @@ Sistema operacional monolitico de 32 bits desenvolvido do zero para a arquitetur
 
 ## Visao Geral
 
-O migOS e um kernel bare-metal de 32 bits escrito em C (padrao GNU99 freestanding) e Assembly x86 (NASM). O projeto implementa desde o setor de inicializacao MBR de 512 bytes ate um terminal interativo com historico e um ambiente grafico retro inspirado no classico **Mac OS System 7 (1991)** padronizado na resolucao de **640x480 pixels a 32-bit True Color (ARGB/XRGB)**, passando por gerenciamento de memoria fisica baseado em mapa de bits (PMM Frame Bitmap 4KB), alocador dinamico de memoria no Heap (KHeap com coalescencia e divisao de blocos), sistema de arquivos hierárquico com suporte a pastas e persistência real em disco ATA/IDE (MIGFS), controle de interrupcoes por hardware (IDT e PIC 8259A), temporizacao precisa por hardware (PIT 8254), driver de video Bochs/QEMU BGA com deteccao dinamica de barramento PCI e Linear Framebuffer (LFB), suporte a teclado e mouse PS/2 com rastreamento estável de coordenadas, biblioteca C freestanding, editor de texto visual (TextEdit / Edit), interpretador e executor de scripts `.txt` com calculadora aritmética e **Emulador completo de Nintendo Game Boy (Peanut-GB) executando Pokémon Red / Blue / Yellow** diretamente em Ring 0 bare-metal com salvamento e persistência de save games (`.sav`) em disco.
+O migOS e um kernel bare-metal de 32 bits escrito em C (padrao GNU99 freestanding) e Assembly x86 (NASM). O projeto implementa desde o setor de inicializacao MBR de 512 bytes ate um terminal interativo com historico e um ambiente grafico retro inspirado no classico **Mac OS System 7 (1991)** padronizado na resolucao de **640x480 pixels a 32-bit True Color (ARGB/XRGB)**, passando por gerenciamento de memoria fisica baseado em mapa de bits (PMM Frame Bitmap 4KB), alocador dinamico de memoria no Heap (KHeap com coalescencia e divisao de blocos), sistema de arquivos hierárquico com suporte a pastas, carimbos de data/hora reais (timestamps) e persistência real em disco ATA/IDE (MIGFS), controle de interrupcoes por hardware (IDT e PIC 8259A), temporizacao precisa por hardware (PIT 8254), driver de relógio em tempo real da placa-mãe (CMOS / RTC com decodificação BCD), driver completo de áudio para PC Speaker via Canal 2 do PIT e Porta 0x61 com efeitos sonoros clássicos (Mac OS Startup Chime, Sosumi, Clicks, Trash, Success), driver de video Bochs/QEMU BGA com deteccao dinamica de barramento PCI e Linear Framebuffer (LFB), suporte a teclado e mouse PS/2 com rastreamento estável de coordenadas, biblioteca C freestanding, editor de texto visual (TextEdit / Edit), interpretador e executor de scripts `.txt` com calculadora aritmética e **Emulador completo de Nintendo Game Boy (Peanut-GB) executando Pokémon Red / Blue / Yellow** diretamente em Ring 0 bare-metal com salvamento e persistência de save games (`.sav`) em disco.
 
 O kernel nao utiliza qualquer biblioteca padrao do sistema hospedeiro (`-ffreestanding -fno-builtin`), operando diretamente sobre o hardware x86 atraves de instrucoes de maquina e portas de entrada/saida (I/O Ports).
 
@@ -55,12 +58,31 @@ O kernel nao utiliza qualquer biblioteca padrao do sistema hospedeiro (`-ffreest
 - Kernel Panic com tela de diagnostico, dump completo dos registradores de execucao (EIP, CS, EFLAGS, EAX, EBX, ECX, EDX, ESP, EBP, ESI, EDI), contagem regressiva em tempo real sincronizada via hardware e rotina de reinicializacao automatica (Triple Fault forcado / Fast Reset).
 - Remapeamento dos controladores de interrupcao PIC 8259A Master/Slave (IRQs 0-15 redirecionados para vetores 32-47).
 - Temporizacao periodica em 100 Hz gerada pelo Programmable Interval Timer (PIT 8254), fornecendo medicoes de tempo de atividade (uptime em segundos e milissegundos) e rotinas de espera (`sleep` e `timer_wait`) sincronizadas com a instrucao `hlt`.
+- **Driver de Áudio para PC Speaker & Efeitos Sonoros (SFX)**:
+  - Síntese de áudio por onda quadrada utilizando o Canal 2 do PIT 8254 (porta de comando `0x43` com byte `0xB6` e porta de dados `0x42`) operando na frequência base de 1.193.180 Hz.
+  - Controle de porta do sistema `0x61` (bits 0 e 1 para habilitação de porta de gating do PIT 2 e acionamento do cone do alto-falante).
+  - Tabela completa de frequências de notas musicais (`NOTE_C3` a `NOTE_B6`) e estrutura de notas (`note_t`).
+  - Suporte a controle de silenciamento global (*Mute*): `sound_set_mute()` e `sound_is_muted()`.
+  - **Conjunto de Efeitos Sonoros Integrados (SFX)**:
+    - **Mac OS Classic Startup Chime (`SFX_STARTUP`)**: Acorde arpejado de Fá Maior (F3 175Hz -> C4 262Hz -> F4 349Hz -> A4 440Hz -> C5 523Hz) reproduzido no boot do kernel.
+    - **Beep de Alerta da GUI / Sosumi (`SFX_ALERT`)**: A5 880Hz (30ms) -> Pausa (10ms) -> F5 698Hz (60ms) disparado em caixas modais e alertas.
+    - **Clique de Interface (`SFX_CLICK`)**: Pulso curto de 2500 Hz para cliques de botões, itens de menu e alternâncias.
+    - **Esvaziamento de Lixeira / Ação Destrutiva (`SFX_TRASH`)**: Varredura tonal descendente (800Hz -> 500Hz -> 300Hz -> 150Hz) ao deletar arquivos/pastas.
+    - **Confirmação de Sucesso / Save (`SFX_SUCCESS`)**: G5 784Hz (40ms) -> C6 1047Hz (120ms) ao salvar documentos no TextEdit e criar arquivos/pastas no disco ATA.
+- **Driver de Relógio em Tempo Real (CMOS / RTC da Placa-Mãe)**:
+  - Leitura direta dos registradores da bateria da placa-mãe através das portas de E/S `0x70` (índice) e `0x71` (dados).
+  - Sincronização segura aguardando o ciclo UIP (*Update In Progress*) do Registrador de Status A (`0x0A`) para evitar leituras corrompidas na virada de segundos.
+  - Decodificação automática de BCD (*Binary-Coded Decimal*) para binário conforme sinalizado pelo Registrador de Status B (`0x0B`), com suporte aos formatos 12h AM/PM e 24h.
+  - Suporte ao registrador de século (`0x32`) e algoritmo do calendário Gregoriano com cálculo de anos bissextos.
+  - Conversão bidirecional entre tempo estruturado (`rtc_time_t`) e timestamp *Unix Epoch* (segundos desde 1970).
+  - **Relógio em Tempo Real na Barra de Menus da GUI**: Exibição contínua do horário real do computador (`HH:MM:SS`) no canto superior direito do desktop System 7, com widget suspenso interativo ao clicar sobre o relógio (exibindo Data Real, Hora Real e Uptime do sistema).
+  - **Carimbos de Data/Hora Reais (Timestamps) no MIGFS**: Criação (`created_time`) e modificação (`modified_time`) de arquivos e pastas no disco ATA armazenam timestamps reais, visíveis na coluna de modificação no gerenciador `migOS HD` e no comando `ls` do terminal.
 - Gerenciador de Memoria Fisica (PMM) com granularidade de frames de 4 KB gerenciados por mapa de bits (bitmap), protegendo o primeiro 1 MB de memoria fisica e fornecendo alocacao contigua de blocos.
 - Alocador dinamico de memoria do Kernel (KHeap / kmalloc, kfree, kcalloc, krealloc) baseado em lista duplamente encadeada com cabecalhos protegidos por assinatura magica (0x1A2B3C4D), politica First-Fit, divisao automatica de blocos (splitting), fusao de blocos livres adjacentes (coalescing) e autoexpansao sob demanda via PMM.
 - **Sistema de Arquivos Hierárquico e Persistente (MIGFS)**:
-  - Suporte completo a diretórios e subdiretórios hierárquicos (`cd`, `pwd`, `mkdir`, `rmdir`, `mv`, `cp`).
-  - Gravação e leitura persistente de setores LBA no Disco Rígido ATA/IDE primário (Superbloco `0x4D494746` no LBA 1025, Tabela de Descritores e Blocos de Dados).
-  - Sincronização sob demanda com disco rígido (`sync`) e carregamento automático durante o boot.
+  - Suporte completo a diretórios e subdiretórios hierárquicos (`cd`, `pwd`, `mkdir`, `rmdir`, `mv`, `cp`, `touch`).
+  - Gravação e leitura persistente de setores LBA no Disco Rígido ATA/IDE primário (Superbloco `0x4D494746` no LBA 1025, Tabela de Descritores de 64 bytes e Blocos de Dados).
+  - Sincronização sob demanda com disco rígido (`sync`) e carregamento automático durante o boot preservando os carimbos de data/hora.
 - Driver Grafico Bochs/QEMU BGA (Bochs Graphics Adapter) com leitura dinamica do barramento PCI para identificacao do endereco base do Linear Framebuffer (BAR0) e configuracao de modos de video de alta resolucao em 32-bit True Color.
 - **Emulador de Game Boy (Peanut-GB) e Jogo Pokémon Bare-Metal**:
   - Emulador completo de Game Boy (DMG) portado para Ring 0 bare-metal sem sistema operacional hospedeiro.
@@ -75,13 +97,20 @@ O kernel nao utiliza qualquer biblioteca padrao do sistema hospedeiro (`-ffreest
   - Execução de scripts em lote via CLI (`run <script.txt>`, `exec <script.txt>`) ou diretamente pelo TextEdit.
   - Suporte a variáveis de ambiente (`set VAR=VAL`), expansão de variáveis (`$VAR`), controle de pausas (`sleep`, `pause`), impressão de mensagens (`echo`), alteração de cores (`color`) e comandos nativos do sistema.
   - **Calculadora Aritmética Embutida (`calc` / `eval`)**: Motor de análise sintática descendente recursiva (*Recursive Descent Parser*) com suporte a operadores (`+`, `-`, `*`, `/`), parênteses aninhados e precedência matemática correta.
-- Terminal CLI em Alta Resolucao (640x480):
-  - 80 colunas por 30 linhas de texto com fonte bitmap 8x16 de alta nitidez.
-  - Buffer circular retroativo de 300 linhas de historico.
-  - Navegacao de historico via roda do mouse ou Page Up / Page Down.
-  - Cursor visual e espelhamento serial instantaneo via porta COM1 (0x3F8).
+- **Terminal CLI Avançado com Scrollbar & Ergonomia Linux (640x480)**:
+  - 80 colunas por 30 linhas de texto com fonte bitmap 8x16 de alta nitidez e quebra inteligente na coluna 78.
+  - **Buffer Unificado Contínuo (500 Linhas)**: Arquitetura idêntica a terminais modernos (PowerShell / Linux / Windows Terminal), mantendo histórico de comandos e saídas em ordem cronológica contínua.
+  - **Barra Lateral de Rolagem (Scrollbar Visual na Coluna 79)**: Botões de navegação superior (`▲`) e inferior (`▼`), trilha contínua e bloco deslizante (*Thumb `█`*) dimensionado e posicionado proporcionalmente ao histórico da sessão.
+  - **Navegação de Rolagem Completa**: Suporte nativo a Roda do Mouse (*Scroll Wheel*), cliques com mouse na barra lateral, e teclas `Page Up`, `Page Down`, `Shift + ↑` / `Shift + ↓` (1 linha suave) e `Shift + Page Up` / `Shift + Page Down` (topo / base).
+  - **Indicador de Rolagem no Topo (*Overlay Badge*)**: Exibição elegante de `[^ +N lin]` informando a distância de rolagem e retorno automático ao prompt ao vivo ao digitar.
+  - **Edição de Linha Interativa no Shell**: Navegação de cursor (`←`, `→`, `Home`, `End`), inserção de caracteres no meio da linha, deleção à frente (`Delete`) e atrás (`Backspace`).
+  - **Atalhos POSIX / Linux CLI**: `Ctrl+C` (cancelar linha), `Ctrl+L` (limpar tela mantendo o prompt), `Ctrl+U` (apagar até o início), `Ctrl+K` (apagar até o fim), `Ctrl+W` (apagar palavra anterior), `Ctrl+A` (início da linha), `Ctrl+E` (fim da linha).
+  - **Auto-Completar Inteligente (`Tab`)**: Completa comandos internos, executáveis, arquivos e pastas do diretório atual com detecção contextual.
+  - **Histórico Estendido de Comandos**: Armazena até 32 comandos na sessão, comando `history` para listagem numerada e reexecução rápida por índice (`!n`) ou prefixo (`!str`).
+  - **Comandos e Utilitários Padrão Linux / POSIX**: `echo`, `free` (diagnóstico de memória RAM), `df` (estatísticas do disco rígido ATA e MIGFS), `date` (data/hora e uptime), `help [comando]` contextual e aliases clássicos (`cls`, `dir`, `md`, `rd`, `del`, `type`, `unlink`).
+  - Cursor visual animado e espelhamento serial instantâneo via porta COM1 (`0x3F8`).
   - Decodificador e transliterador de caracteres acentuados UTF-8 para a tabela IBM CP437.
-  - Prompt inteligente com diretório de trabalho corrente (`migOS:/docs>`).
+  - Prompt inteligente colorido com diretório de trabalho corrente (`migOS:/docs>`).
 - Interface Grafica Retro Mac OS System 7 Classic (640x480 @ 32-bit True Color):
   - Fundo pontilhado dithered 50% Gray Stipple.
   - Barra de menus superior fixa com logo do migOS, menus suspensos interativos ("migOS", "File", "Edit", "View", "Special", "Help") e relogio de uptime em tempo real.
@@ -128,6 +157,8 @@ MigelSO/
 │   │   ├── bga.h                    # Interface do adaptador grafico Bochs/QEMU BGA (640x480 32-bit)
 │   │   ├── keyboard.h               # Interface do driver de teclado PS/2
 │   │   ├── mouse.h                  # Interface do driver de mouse PS/2
+│   │   ├── rtc.h                    # Interface do driver de relogio em tempo real (CMOS / RTC)
+│   │   ├── sound.h                  # Interface do driver de audio PC Speaker e efeitos sonoros (SFX)
 │   │   ├── vga.h                    # Interface do terminal de texto em alta resolucao (80x30 / 640x480)
 │   │   └── vga_mode13.h             # Interface legada de registradores VGA
 │   │
@@ -162,7 +193,8 @@ MigelSO/
 │   │   ├── stdint.h                 # Tipos inteiros de largura exata (uint8_t, int32_t, uint32_t, uint64_t)
 │   │   ├── stdio.h                  # Formatacao e manipulacao de texto em streams
 │   │   ├── stdlib.h                 # Alocacao dinamica, conversao de strings e utilitarios
-│   │   └── string.h                 # Operacoes com blocos de memoria e strings C
+│   │   ├── string.h                 # Operacoes com blocos de memoria e strings C
+│   │   └── time.h                   # Tipos de tempo, struct tm e prototipos time_t
 │   │
 │   └── shell/                       # Cabecalho do interpretador de comandos
 │       └── shell.h                  # Interface de execucao do shell e buffer de comandos
@@ -190,6 +222,10 @@ MigelSO/
 │   │   │   └── keyboard.c           # Tratador de IRQ1, tabela de scancodes e fila de eventos
 │   │   ├── mouse/
 │   │   │   └── mouse.c              # Tratador de IRQ12, decodificacao de 3 bytes e tracking de coordenadas
+│   │   ├── rtc/
+│   │   │   └── rtc.c                # Driver CMOS/RTC com BCD, UIP, 24h e conversao Unix Epoch
+│   │   ├── sound/
+│   │   │   └── sound.c              # Driver de audio PC Speaker (PIT Canal 2 / Porta 0x61) e SFX
 │   │   └── vga/
 │   │       ├── vga.c                # Renderizador de terminal em 640x480 com historico retroativo
 │   │       └── vga_mode13.c         # Manipulador direto de registradores VGA
@@ -219,7 +255,8 @@ MigelSO/
 ├── libc/                            # Implementacao da biblioteca C minimalista (.c)
 │   ├── stdio.c                      # Implementacao de printf, sprintf, snprintf, vsnprintf e sscanf
 │   ├── stdlib.c                     # Implementacao de itoa, atoi, atol, strtol, qsort, rand, srand
-│   └── string.c                     # Implementacao de memcpy, memset, memcmp, strcpy, strcmp, etc.
+│   ├── string.c                     # Implementacao de memcpy, memset, memcmp, strcpy, strcmp, etc.
+│   └── time.c                       # Implementacao de time, localtime, gmtime, mktime, asctime, ctime
 │
 └── shell/                           # Interpretador de comandos
     └── shell.c                      # Processamento de comandos hierarquicos, lancadores e utilitarios
@@ -391,13 +428,16 @@ Driver do adaptador grafico Bochs/QEMU BGA (Bochs Graphics Adapter):
 
 #### `include/drivers/vga.h` e `kernel/drivers/vga/vga.c`
 Driver de terminal de texto de alta resolucao em 640x480:
-- Renderiza uma matriz de 80 colunas por 30 linhas de texto com celulas de 8x16 pixels utilizando a fonte bitmap integrada.
-- Suporte a 16 cores clássicas do padrao VGA/ANSI mapeadas em 32-bit True Color.
-- Gerencia um buffer circular de historico retroativo com capacidade para 300 linhas de texto (`scrollback`).
-- Permite navegacao no historico atraves da roda do mouse ou teclas Page Up e Page Down com barra de status visual.
-- Implementa renderizacao de cursor visual e espelhamento simultaneo de todos os caracteres enviados ao terminal para a porta serial COM1 (`0x3F8`), facilitando depuracao via terminal remoto ou logs de emulacao.
-- Decodificador UTF-8 para exibicao de caracteres acentuados da lingua portuguesa (a, e, i, o, u, c, etc.).
-- A funcao `vga_set_cell(x, y, c, fg, bg)` permite aos jogos e utilitarios manipularem celulas de texto individuais com atualizacao visual imediata.
+- **Buffer Unificado Contínuo (500 Linhas)**: Implementa matriz unificada `term_buffer[500][80]` operando com janela deslizante (*Viewport* de 30 linhas), garantindo rolagem 100% contínua e sem corte de texto, idêntica ao Windows Terminal, PowerShell e Linux.
+- **Barra Lateral de Rolagem (Scrollbar na Coluna 79)**: Renderiza botão superior `▲` (char 30), botão inferior `▼` (char 31), trilha contínua vertical e bloco deslizante (*Thumb `█`* em ciano, char 127) dimensionado e posicionado em tempo real proporcionalmente à extensão do histórico.
+- **Indicador de Rolagem no Topo (*Overlay Badge*)**: Quando o usuário visualiza linhas anteriores, um badge `[^ +N lin]` é exibido no canto superior direito indicando a distância exata em relação ao prompt.
+- **Quebra Inteligente na Coluna 78**: O texto e o cursor quebram automaticamente antes da coluna 79, mantendo a barra de rolagem sempre visível e limpa.
+- **Retorno Automático ao Vivo**: Se o usuário estiver lendo o histórico e começar a digitar, o terminal volta instantaneamente para a linha de comando atual.
+- Suporte a 16 cores clássicas do padrão VGA/ANSI mapeadas em 32-bit True Color.
+- Cursor visual animado e espelhamento simultâneo de todos os caracteres para a porta serial COM1 (`0x3F8`).
+- Decodificador UTF-8 para exibição de caracteres acentuados da língua portuguesa (á, é, í, ó, ú, ç, ã, õ, etc.).
+- Funções `vga_scroll_history_up(lines)`, `vga_scroll_history_down(lines)`, `vga_scroll_history_reset()` e `vga_get_scroll_offset()`.
+- A função `vga_set_cell(x, y, c, fg, bg)` permite aos jogos e utilitários manipularem células de texto individuais com atualização visual imediata.
 
 #### `include/drivers/vga_mode13.h` e `kernel/drivers/vga/vga_mode13.c`
 Driver de manipulacao direta de registradores de hardware da controladora VGA padrao (MISC, Sequencer, CRTC, Graphics Controller e Attribute Controller) e operacoes de paleta DAC de 256 cores.
@@ -410,31 +450,73 @@ Driver de disco rígido ATA / IDE em Modo PIO (Programmed Input/Output):
 #### `include/drivers/keyboard.h` e `kernel/drivers/keyboard/keyboard.c`
 Driver do teclado padrao PS/2 (porta de dados `0x60` e porta de status `0x64`):
 - Atendido na rotina de interrupcao IRQ 1 (vetor 33).
-- Decodifica scancodes do Set 1, tratando teclas de modificacao (Shift, Ctrl, Alt, Caps Lock), teclas estendidas de navegacao (`0xE0` + setas Cima/Baixo/Esquerda/Direita, Home, End, PageUp, PageDown) e teclas de funcao (F1 a F12).
-- Mantem um buffer de linha interativo para o shell e uma fila circular de eventos assincronos (`keyboard_get_doom_key`) para uso por aplicacoes graficas e jogos.
+- Decodifica scancodes do Set 1, tratando teclas de modificacao (Shift, Ctrl, Alt, Caps Lock) e teclas estendidas (`0xE0`).
+- **Edição Interativa de Linha**: Navegação por cursor (`←` e `→`), início (`Home`), fim (`End`), inserção no meio do texto, deleção à frente (`Delete`) e atrás (`Backspace`).
+- **Atalhos POSIX / Linux CLI com `Ctrl`**:
+  - `Ctrl+C`: Cancela a linha atual e imprime `^C`, restaurando o prompt limpo.
+  - `Ctrl+L`: Limpa a tela do terminal e redessina o prompt com o texto atual.
+  - `Ctrl+U`: Apaga todo o texto do início da linha até o cursor.
+  - `Ctrl+K`: Apaga todo o texto do cursor até o final da linha.
+  - `Ctrl+W`: Apaga a palavra anterior ao cursor.
+  - `Ctrl+A`: Move o cursor instantaneamente para o início da linha.
+  - `Ctrl+E`: Move o cursor instantaneamente para o fim da linha.
+- **Navegação de Rolagem por Teclado**:
+  - `Page Up` / `Page Down`: Rola 10 linhas para cima / para baixo.
+  - `Shift + ↑` / `Shift + ↓`: Rola suavemente 1 linha para cima / para baixo.
+  - `Shift + Page Up` / `Ctrl + Home`: Salta direto para o topo do histórico.
+  - `Shift + Page Down` / `Ctrl + End`: Salta direto para a base (prompt ao vivo).
+- **Auto-Completar Inteligente (`Tab`)**: Dispara a função `shell_autocomplete()` para autocompletar comandos e caminhos.
+- Mantém fila circular assíncrona de eventos (`keyboard_get_doom_key`) para uso em jogos (Game Boy, Snake, etc.).
 
 #### `include/drivers/mouse.h` e `kernel/drivers/mouse/mouse.c`
 Driver do mouse PS/2 com suporte ao protocolo IntelliMouse:
 - Atendido na rotina de interrupcao IRQ 12 (vetor 44) atraves do controlador auxiliar PS/2.
-- Inicializa e ativa a extensao IntelliMouse enviando a sequencia de comandos de taxa de amostragem (200, 100, 80) para habilitar o pacote de 4 bytes com suporte a roda de rolagem vertical (scroll wheel).
+- Inicializa e ativa a extensao IntelliMouse enviando a sequencia magica de amostragem (200, 100, 80) para habilitar o pacote de 4 bytes com suporte à roda de rolagem vertical (*Scroll Wheel*).
+- **Integração com a Barra de Rolagem do Terminal**:
+  - Rolar a rodinha do mouse para **cima**: Sobe a visualização do histórico (`vga_scroll_history_up(3)`).
+  - Rolar a rodinha do mouse para **baixo**: Desce a visualização até o prompt (`vga_scroll_history_down(3)`).
+  - Clicar na seta superior (`▲`) ou inferior (`▼`) da barra lateral com o botão esquerdo: Executa rolagem interativa.
 - Decodifica movimento relativo nos eixos X e Y, estado dos botoes esquerdo, direito e central, e pulsos da roda de rolagem.
 - Implementa delimitacao configuravel de bordas de tela (`mouse_set_bounds`) para integracao nativa tanto na resolucao de 640x480 quanto no terminal.
+
+#### `include/drivers/rtc.h` e `kernel/drivers/rtc/rtc.c`
+Driver do Relógio em Tempo Real (CMOS / Real-Time Clock) da placa-mãe:
+- Opera diretamente com a controladora CMOS através da porta de comando/endereço `0x70` e porta de dados `0x71`.
+- **Sincronização UIP (*Update In Progress*)**: Realiza espera ativa e verificação de integridade no bit 7 do *Status Register A* (`0x0A`), executando dupla leitura confirmatória para evitar anomalias durante a transição de segundos do hardware.
+- **Decodificação BCD & Modos de Horário**: Inspeciona os bits de configuração do *Status Register B* (`0x0B`) para identificar automaticamente se os registradores de tempo estão em formato BCD (*Binary-Coded Decimal*) ou binário puro, convertendo valores BCD para binário e ajustando formatos 12h AM/PM para 24h.
+- **Suporte ao Século & Calendário Gregoriano**: Leitura do registrador de século `0x32` (quando disponível) e algoritmo completo para conversão bidirecional entre a data/hora do RTC (`rtc_time_t`) e o timestamp *Unix Epoch* (segundos decorridos desde 01/01/1970 00:00:00 UTC), com suporte exato a anos bissextos.
+- **Formatação de Strings & Cache Otimizado**: Funções `rtc_format_datetime`, `rtc_format_date`, `rtc_format_time_full`, `rtc_format_time`, `rtc_format_epoch` e `rtc_format_epoch_short`, além de leitura rápida em cache (`rtc_get_time` e `rtc_get_unix_timestamp`) para atualização fluida a 60 FPS na interface gráfica sem gargalo no barramento de I/O.
+
+#### `include/drivers/sound.h` e `kernel/drivers/sound/sound.c`
+Driver de áudio para PC Speaker e gerador de efeitos sonoros (SFX):
+- **Canal 2 do PIT 8254**: Configura o gerador de onda quadrada através da porta de comando `0x43` com o byte de controle `0xB6` e programa o divisor de 16 bits na porta de dados `0x42` baseado no oscilador de 1.193.180 Hz ($divisor = 1193180 / freq\_hz$).
+- **Porta de Controle B (`0x61`)**: Habilita e desabilita os bits 0 (gate do PIT 2) e 1 (dados do alto-falante) para iniciar e cessar a oscilação acústica.
+- **Gerenciamento de Mudo**: Flag global e funções `sound_set_mute()` e `sound_is_muted()` para silenciar o sistema a qualquer momento.
+- **Tabela de SFX Integrados**: Execução sequencial de notas (`note_t`) com frequências em Hz e durações em ms:
+  - `SFX_STARTUP`: Mac OS Classic Startup Chime (Acorde arpejado F3 -> C4 -> F4 -> A4 -> C5).
+  - `SFX_ALERT`: Beep de Alerta da GUI / Sosumi (A5 880Hz -> Pausa -> F5 698Hz).
+  - `SFX_CLICK`: Clique de interface (pulso ultra-rápido de 2500 Hz).
+  - `SFX_TRASH`: Esvaziamento de Lixeira / Ação destrutiva (varredura descendente 800Hz -> 150Hz).
+  - `SFX_SUCCESS`: Confirmação de Sucesso / Gravação no Disco ATA (G5 784Hz -> C6 1047Hz).
+- **Primitivas de Áudio**: `sound_init()`, `sound_tone(freq)`, `sound_stop()`, `sound_beep(freq, dur)`, `sound_play_sfx(sfx)` e `sound_play_melody(notes, count)`.
 
 ---
 
 ### 7. Sistema de Arquivos (MIGFS / RAMDisk & Disco ATA)
 
 #### `include/fs/migfs.h` e `kernel/fs/migfs.c`
-Sistema de arquivos hierarquico e persistente do migOS:
-- **Estrutura de Descritores**: Gerencia uma tabela de descritores de arquivos e pastas (`migfs_file_t`). Cada entrada contem o nome/caminho do arquivo (ate 64 caracteres), tamanho em bytes, ponteiro para os dados em memoria RAM, flags de permissao e tipo (`MIGFS_FILE_READONLY`, `MIGFS_FILE_DIRECTORY`, `MIGFS_FILE_INUSE`).
+Sistema de arquivos hierarquico, persistente e com carimbos de data/hora do migOS:
+- **Estrutura de Descritores com Timestamps**: Gerencia uma tabela de descritores de arquivos e pastas (`migfs_file_t` e `migfs_disk_entry_t` de exatos 64 bytes). Cada entrada contem nome/caminho (32 bytes), tamanho em bytes (`size`), flags de permissao e tipo (`MIGFS_FILE_READONLY`, `MIGFS_FILE_DIRECTORY`, `MIGFS_FILE_INUSE`), setor inicial (`start_sector`), contagem de setores (`sector_count`), e carimbos de data/hora reais: `created_time` (Unix timestamp de criação) e `modified_time` (Unix timestamp da última alteração).
 - **Suporte Hierarquico a Diretorios**:
   - Funcoes de navegacao e manipulacao de pastas: `migfs_mkdir`, `migfs_rmdir`, `migfs_move`, `migfs_copy`, `migfs_is_dir`, `migfs_get_dir_items`, `migfs_path_combine` e resolucao inteligente de caminhos relativos e absolutos (`..`, `/`).
   - Criacao automatica de pastas padrao do sistema (`/docs`, `/scripts`) e arquivos de demonstracao durante a montagem inicial.
+- **Carimbos de Tempo em Tempo Real**:
+  - Toda operação de escrita (`migfs_create`, `migfs_add_buffer`, `migfs_write`, `migfs_append`, `migfs_mkdir`, `migfs_move`, `migfs_copy`) e o utilitário `migfs_touch` obtêm o horário real da bateria da placa-mãe via `rtc_get_unix_timestamp()`.
 - **Persistencia Real em Disco Rigido ATA/IDE**:
   - Implementa layout de disco seguro a partir do setor LBA 1025 (posicionado logo apos o Kernel de 512 KB).
   - Superbloco gravado no LBA 1025 com assinatura magica `0x4D494746` (`MIGF`), contagem de arquivos e setores alocados.
-  - Gravacao de tabela de descritores e blocos de dados contiguos de 512 bytes diretamente no disco ATA em modo PIO.
-  - A funcao `migfs_sync_to_disk()` executa a sincronizacao sob demanda de todas as alteracoes feitas na sessao para a midia de disco, enquanto `migfs_load_from_disk()` restaura o estado completo no boot.
+  - Gravacao de tabela de descritores de 64 bytes (preservando timestamps) e blocos de dados contiguos de 512 bytes diretamente no disco ATA em modo PIO.
+  - A funcao `migfs_sync_to_disk()` executa a sincronizacao sob demanda de todas as alteracoes feitas na sessao para a midia de disco, enquanto `migfs_load_from_disk()` restaura o estado completo e metadados no boot.
 
 ---
 
@@ -463,20 +545,49 @@ Motor de formatacao de texto completo:
 - Implementacao de `printf`, `sprintf`, `snprintf` e `vsnprintf` com suporte a especificadores de formato `%d`, `%i`, `%u`, `%x`, `%X`, `%p`, `%s`, `%c` e `%%`, incluindo especificadores de largura de campo, preenchimento com zeros (`%02x`, `%08x`), alinhamento a esquerda (`%-10s`) e especificadores de precisao.
 - Implementacao de `sscanf` para analise sintatica de strings com especificadores `%d`, `%s` e `%c`.
 
+#### `include/libc/time.h` e `libc/time.c`
+Implementação da interface padrão C para manipulação e formatação de tempo:
+- Definição de `time_t` e estrutura `struct tm` padrão (`tm_sec`, `tm_min`, `tm_hour`, `tm_mday`, `tm_mon`, `tm_year`, `tm_wday`, `tm_yday`, `tm_isdst`).
+- Funções `time()`, `localtime()`, `gmtime()`, `mktime()`, `asctime()` e `ctime()` integradas ao driver CMOS/RTC para compatibilidade com aplicações C padrão.
+
 ---
 
 ### 9. Shell Interativo
 
 #### `include/shell/shell.h` e `shell/shell.c`
 Interpretador de comandos avancado com prompt hierarquico (`migOS:/docs>`):
-- Opera de forma desacoplada da rotina de interrupcao do teclado, processando eventos a partir de um buffer de entrada.
-- Historico de comandos navegavel com setas Cima e Baixo.
-- Conjunto de comandos integrados:
+- Opera de forma desacoplada da rotina de interrupcao do teclado, processando comandos assíncronos e atualizando o terminal de 640x480.
+- **Auto-Completar Inteligente (`Tab`)**:
+  - Pressionar `Tab` completa automaticamente o nome de comandos internos, scripts, executáveis e arquivos/pastas locais. Se houver múltiplos matches, lista as opções de forma limpa.
+- **Histórico Estendido e Reexecução Rápida**:
+  - Buffer de histórico com capacidade para 32 comandos na memória.
+  - Navegação fluida com setas `↑` e `↓`.
+  - Comando `history`: Lista todos os comandos executados com numeração ordinal.
+  - Execução por índice `!n`: Executa o comando de número `n` do histórico (ex: `!3`).
+  - Execução por prefixo `!str`: Executa o comando mais recente iniciado por `str` (ex: `!pok` executa `pokemon`).
+- **Conjunto de Comandos e Ergonomia Linux/POSIX**:
   - **Navegacao e Diretorios**: `cd <dir>` (troca diretorio), `pwd` (exibe diretorio atual), `mkdir <pasta>` (cria pasta), `rmdir <pasta>` (remove pasta vazia), `mv <orig> <dest>` (move/renomeia), `cp <orig> <dest>` (copia arquivo ou pasta).
-  - **Gerenciamento de Arquivos**: `ls [dir]` (listagem hierarquica com `<DIR>` e `<FILE>`), `ls -a` (visao flat global), `cat <arquivo>` (exibe texto), `touch <arquivo>` (cria arquivo), `write <arq> <txt>` (escreve texto), `rm <arquivo>` (remove arquivo), `sync` (sincroniza RAMDisk com disco ATA).
+  - **Gerenciamento de Arquivos**: `ls [dir]` (listagem hierarquica com `<DIR>`, `<FILE>`, tamanho, carimbo de modificação e atributos), `ls -a` (visao flat global com timestamps), `cat <arquivo>` (exibe texto), `touch <arquivo>` (cria arquivo ou atualiza timestamp real), `write <arq> <txt>` (escreve texto), `rm <arquivo>` (remove arquivo), `sync` (sincroniza RAMDisk com disco ATA).
+  - **Utilitários Padrão Linux / POSIX**:
+    - `echo <texto>`: Imprime texto no terminal com suporte a quebra de linha.
+    - `free`: Exibe relatório de memória RAM física (PMM) e dinâmica (KHeap) com total, uso e livre formatados em KB/MB.
+    - `df`: Exibe o espaço total, utilizado e livre na partição persistente MIGFS / Disco ATA em KB.
+    - `date` / `time`: Exibe a data/hora real decodificada do hardware CMOS RTC (`DD/MM/YYYY HH:MM:SS`), tempo de atividade (*uptime*) e timestamp Unix atual.
+    - `rtc` / `clock` / `cmos`: Painel de diagnóstico do hardware CMOS/RTC com portas I/O (`0x70`/`0x71`), decodificação BCD, modo 24h, data/hora e status de energia da bateria da placa-mãe.
+    - `help [comando]`: Exibe a lista completa de comandos organizados por categoria ou a ajuda detalhada do comando solicitado.
+  - **Aliases de Compatibilidade (DOS / Windows / Linux)**:
+    - `cls` -> `clear`
+    - `dir` -> `ls`
+    - `md` -> `mkdir`
+    - `rd` -> `rmdir`
+    - `del` / `unlink` -> `rm`
+    - `type` -> `cat`
+    - `vi` / `vim` -> `edit`
+    - `time` -> `date`
+    - `clock` / `cmos` -> `rtc`
   - **Edicao e Scripts**: `edit <arquivo>` ou `nano <arquivo>` (abre editor visual no terminal), `run <script.txt>` ou `exec <script.txt>` (executa script em lote), `calc <expressao>` (avalia expressao aritmetica).
   - **Emulacao e Jogos**: `pokemon` (inicia Pokémon Red), `gameboy <rom.gb>` ou `gb <rom>` (emulador de Game Boy), `gbinfo <rom>` (exibe cabecalho do cartucho), `snake` (Jogo da Cobrinha), `matrix` (animacao visual).
-  - **Diagnostico do Sistema**: `meminfo` (estatisticas PMM e KHeap), `memtest` (teste de estresse do Heap), `uptime` (tempo de execucao e ticks PIT), `version` (versao do kernel), `about` (resumo arquitetural), `panic` (teste de Kernel Panic), `reboot` (reinicializacao), `clear` (limpeza de tela).
+  - **Diagnostico do Sistema**: `rtc` (diagnostico CMOS RTC), `meminfo` (estatisticas PMM e KHeap), `memtest` (teste de estresse do Heap), `uptime` (tempo de execucao e ticks PIT), `version` (versao do kernel), `about` (resumo arquitetural), `panic` (teste de Kernel Panic), `reboot` (reinicializacao).
 
 ---
 
@@ -489,14 +600,17 @@ Tabela de fonte bitmap monocromatica 8x8 contendo o desenho dos 128 caracteres d
 Subsistema de interface grafica retro inspirada no classico **Apple Macintosh System 7 (1991)** rodando em **640x480 pixels a 32-bit True Color**:
 - Aloca um backbuffer de 1.228.800 bytes (640x480x4) via `kmalloc` para desenho suave sem cintilacao de tela (double buffering).
 - Renderiza o padrao de fundo classico 50% Gray Stipple dithered em cinza e branco.
-- Barra de menus superior fixa (altura de 20 pixels) contendo o logotipo do migOS, menus suspensos interativos ("migOS", "File", "Edit", "View", "Special", "Help") com sombra projetada e relogio de tempo de atividade em tempo real.
+- **Barra de Menus Superior Fixa com Relógio Real**: Altura de 20 pixels contendo o logotipo do migOS, menus suspensos interativos ("migOS", "File", "Edit", "View", "Special", "Help") com sombra projetada e **Relógio Real CMOS RTC** no canto superior direito (`HH:MM:SS`). Clicar sobre a área do relógio abre um widget suspenso exibindo a Data Real (`DD/MM/AAAA`), Hora Real e Tempo de Atividade (*Uptime*).
 - **Gerenciador de Arquivos Visual ("migOS HD" 460x330 px)**:
   - Navegacao completa por subdiretorios com exibicao do caminho atual no titulo da janela.
   - Barra de ferramentas interativa com botoes `< Voltar`, `+ Pasta`, `+ Arq`, `Mover`, `Copiar` e `Excluir`.
+  - Coluna de **Data/Hora de Modificação**: Exibe o carimbo real (`DD/MM HH:MM`) de cada arquivo e diretório gerado a partir do hardware RTC.
   - Caixas de dialogo modais com caixas de texto interativas para entrada de nomes de arquivos e pastas.
   - **Suporte a Duplo Clique**: Clique duplo em pastas navega para o subdiretorio (ou sobe com `..`), clique duplo em `.txt` abre no editor TextEdit e clique duplo em `.gb` inicia o emulador de Game Boy.
+- **Janela de Perfil do Sistema ("System Profile" 460x340 px)**: Exibe a data/hora real lida do hardware CMOS RTC e o tempo de atividade decorrido do sistema.
 - **Editor de Texto Grafico ("TextEdit")**: Janela com barra de ferramentas (`Novo`, `Abrir`, `Salvar`, `Executar`, `Limpar`), campo de nome do arquivo, indicador de alteracoes pendentes (`*`), cursor de texto e atalhos.
 - **Icones Interativos do Desktop**: "migOS HD", "Pokemon", "Snake.app", "Terminal.app" e "Trash" com suporte a selecao e duplo-clique.
+- **Botão Fechar Fiel ao Mac OS System 7 (Go-Away Box Animado)**: Caixa quadrada de 13x13 px com bisel duplo na barra de título. Ao clicar e segurar o mouse sobre o botão, exibe a animação clássica de quadrado rebaixado escuro (*depressed inset box*). Se o usuário arrastar o cursor para fora enquanto segura o clique, o botão volta ao estado normal; ao soltar o mouse dentro do botão, a janela é fechada imediatamente com confirmação visual.
 - Cursor do mouse classico System 7 renderizado diretamente sobre o backbuffer com rastreamento confiavel via interrupcao IRQ12.
 
 ---
@@ -610,6 +724,136 @@ Quando o jogador salva a partida dentro de Pokémon (pelo menu *SAVE* do jogo), 
 
 ---
 
+## Driver de Relógio em Tempo Real (CMOS / RTC) & Timestamps no MIGFS
+
+O migOS integra um driver completo de **Relógio em Tempo Real (CMOS / RTC)** operando diretamente sobre o circuito integrado de temporização e bateria da placa-mãe (chip Motorola MC146818 ou compatível). Essa arquitetura substitui medições relativas de uptime por carimbos de tempo reais de alta precisão em todo o sistema operacional:
+
+```mermaid
+flowchart TD
+    subgraph Hardware da Placa-Mãe [CMOS RTC - Bateria CR2032]
+        P0["Porta 0x70: Registrador de Endereço / Índice"]
+        P1["Porta 0x71: Registrador de Dados"]
+        Regs["Registradores 0x00-0x09: Segundos, Minutos, Horas, Dia, Mês, Ano"]
+        StatA["Reg 0x0A (Status A): Bit 7 UIP (Update In Progress)"]
+        StatB["Reg 0x0B (Status B): Bit 2 (BCD/Binário), Bit 1 (24h/12h)"]
+        Cent["Reg 0x32: Século (20xx)"]
+    end
+
+    subgraph Driver CMOS RTC [kernel/drivers/rtc/rtc.c]
+        UIP["Sincronização UIP: Aguarda término do ciclo de atualização"]
+        BCD["Decodificação BCD: ((v >> 4) * 10) + (v & 0x0F)"]
+        Conv["Ajuste de Formato: 12h AM/PM para 24h & Século 2000+"]
+        Epoch["Conversor Gregoriano: rtc_time_t <-> Timestamp UNIX Epoch"]
+        Cache["Cache Rápido em RAM: Atualização sem bloqueio de I/O a 60 FPS"]
+    end
+
+    subgraph Subsistemas Integrados no migOS
+        GUI["GUI Desktop System 7: Relógio HH:MM:SS & Widget Suspenso"]
+        FS["MIGFS: Metadados created_time e modified_time no Disco ATA"]
+        CLI["Shell Terminal: date, time, rtc, clock e ls com Timestamps"]
+        LibC["LibC Freestanding: time(), localtime(), gmtime(), ctime()"]
+    end
+
+    P0 --> UIP
+    P1 --> UIP
+    StatA --> UIP
+    UIP --> BCD
+    StatB --> BCD
+    Regs --> BCD
+    Cent --> Conv
+    BCD --> Conv
+    Conv --> Epoch
+    Epoch --> Cache
+    Cache --> GUI
+    Cache --> FS
+    Cache --> CLI
+    Cache --> LibC
+```
+
+### 1. Comunicação com o Hardware CMOS e Decodificação BCD
+- **Portas de E/S**: A CPU acessa a memória CMOS enviando o índice do registrador para a porta `0x70` e lendo/escrevendo o byte correspondente na porta `0x71`.
+- **Prevenção de Condições de Corrida (*Race Conditions*)**: O driver monitora o bit 7 do *Status Register A* (`RTC_STATUS_A_UIP`). Quando o chip está atualizando os registradores (frequência de 1 Hz), o driver aguarda o ciclo terminar e realiza uma **dupla leitura confirmatória**, garantindo que nenhum segundo seja lido no meio da transição.
+- **Decodificação BCD Dinâmica**: Em placas-mãe PC/AT padrão e emuladores (QEMU/Bochs/VirtualBox), os números são comumente gravados em formato *Binary-Coded Decimal* (por exemplo, `0x26` representando o número 26). O driver inspeciona o bit 2 do *Status Register B* (`0x04` = Binário Puro, `0x00` = BCD) e converte automaticamente os valores utilizando a fórmula:
+  $$\text{Valor} = \left(\frac{\text{BCD}}{16} \times 10\right) + (\text{BCD} \pmod{16})$$
+- **Formato de 24 Horas & Século**: Converte horas em modo 12h (com flag de PM no bit 7) para o formato militar de 24 horas e calcula o século atual através do registrador `0x32` ou inferência da virada do milênio.
+
+### 2. Timestamps Reais no Sistema de Arquivos (MIGFS)
+- Os descritores de disco de 64 bytes (`migfs_disk_entry_t`) e descritores em memória (`migfs_file_t`) armazenam dois carimbos de tempo em formato **Unix Epoch Timestamp** (segundos desde 1970):
+  - `created_time`: Data e hora exata da criação do arquivo ou pasta.
+  - `modified_time`: Data e hora da última operação de escrita (`write`), concatenação (`append`), cópia (`cp`), movimentação (`mv`) ou toque (`touch`).
+- **Visualização em Colunas**: O comando `ls` e a listagem da janela `migOS HD` exibem o carimbo formatado no padrão `DD/MM HH:MM` para rápida inspeção visual.
+
+### 3. Relógio e Widget Interativo na GUI Mac OS System 7
+- **Barra Superior**: O canto superior direito exibe o relógio digital (`HH:MM:SS`) sincronizado continuamente com o RTC da placa-mãe.
+- **Menu Dropdown / Widget do Relógio**: Ao clicar sobre o relógio na barra superior, um menu suspenso elegante exibe:
+  - **Data Real**: `DD/MM/AAAA`
+  - **Hora Real**: `HH:MM:SS`
+  - **Tempo Ativo (*Uptime*)**: `X min Y s (Z ticks PIT @ 100Hz)`
+
+---
+
+## Driver de Áudio para PC Speaker (PIT 8254) & Efeitos Sonoros (SFX)
+
+O migOS implementa um driver completo de síntese de áudio bare-metal através do **Canal 2 do PIT 8254** e da **Porta de Controle B (`0x61`)**, gerando ondas quadradas harmônicas diretamente no transdutor piezoelétrico ou cone do PC Speaker da placa-mãe sem necessidade de drivers de terceiros:
+
+```mermaid
+flowchart TD
+    subgraph Hardware de Temporização e Som [x86 Architecture]
+        PIT_CMD["Porta 0x43: Byte de Comando 0xB6<br/>(Canal 2, LSB/MSB, Modo 3 Square Wave)"]
+        PIT_DAT["Porta 0x42: Divisor de 16 bits<br/>(1193180 / freq_hz)"]
+        PORT_61["Porta 0x61: System Control Port B<br/>Bit 0 (PIT2 Gate) | Bit 1 (Speaker Data)"]
+        SPEAKER["Cone do Alto-Falante / PC Speaker"]
+    end
+
+    subgraph Driver de Áudio migOS [kernel/drivers/sound/sound.c]
+        TONE["sound_tone(freq): Calcula divisor e ativa Porta 0x61"]
+        STOP["sound_stop(): Limpa bits 0 e 1 da Porta 0x61"]
+        BEEP["sound_beep(freq, ms): Tom bloqueante com sleep(ms)"]
+        SFX["sound_play_sfx(tipo): Tabela de melodias predefinidas"]
+        MUTE["sound_set_mute(1/0): Flag global de silenciamento"]
+    end
+
+    subgraph Efeitos Sonoros Integrados [SFX]
+        S1["SFX_STARTUP: Mac OS Classic Startup Chime (Fá Maior)"]
+        S2["SFX_ALERT: Beep de Alerta da GUI / Sosumi"]
+        S3["SFX_CLICK: Clique de Interface de Usuário (2500 Hz)"]
+        S4["SFX_TRASH: Esvaziamento de Lixeira / Ação Destrutiva"]
+        S5["SFX_SUCCESS: Confirmação de Sucesso / Salvar no Disco"]
+    end
+
+    TONE --> PIT_CMD
+    TONE --> PIT_DAT
+    TONE --> PORT_61
+    STOP --> PORT_61
+    PORT_61 --> SPEAKER
+
+    SFX --> S1
+    SFX --> S2
+    SFX --> S3
+    SFX --> S4
+    SFX --> S5
+```
+
+### 1. Mecanismo de Funcionamento e Cálculo de Frequência
+- **Geração de Onda Quadrada**: O Canal 2 do PIT opera como divisor de frequência do clock base de **1.193.180 Hz**.
+- **Fórmula de Frequência**:
+  $$\text{Divisor} = \frac{1.193.180}{\text{Frequência (Hz)}}$$
+- **Controle dos Bits da Porta 0x61**:
+  - **Ligar o Som**: `outb(0x61, inb(0x61) | 0x03)` (habilita o sinal de clock do PIT2 e conecta a saída ao speaker).
+  - **Silenciar o Som**: `outb(0x61, inb(0x61) & ~0x03)` (desconecta a saída e desativa a oscilação).
+
+### 2. Tabela de Efeitos Sonoros do migOS (SFX):
+
+| Efeito Sonoro | Identificador | Sequência de Notas / Frequências | Aplicação no Sistema |
+| :--- | :--- | :--- | :--- |
+| **Startup Chime** | `SFX_STARTUP` | F3 (175Hz, 25ms) $\rightarrow$ C4 (262Hz, 25ms) $\rightarrow$ F4 (349Hz, 30ms) $\rightarrow$ A4 (440Hz, 40ms) $\rightarrow$ C5 (523Hz, 220ms) | Inicialização do kernel / Boot |
+| **Alerta Sosumi** | `SFX_ALERT` | A5 (880Hz, 30ms) $\rightarrow$ Pausa (10ms) $\rightarrow$ F5 (698Hz, 60ms) | Diálogos modais e avisos na GUI |
+| **Clique de Interface** | `SFX_CLICK` | Pulso ultra-curto de 2500 Hz (2ms) | Cliques de botões, abas e menus |
+| **Trash / Exclusão** | `SFX_TRASH` | Varredura descendente: 800Hz (15ms) $\rightarrow$ 500Hz (15ms) $\rightarrow$ 300Hz (25ms) $\rightarrow$ 150Hz (40ms) | Exclusão de arquivos e diretórios |
+| **Sucesso / Salvar** | `SFX_SUCCESS` | G5 (784Hz, 40ms) $\rightarrow$ C6 (1047Hz, 120ms) | Gravação de arquivos e criação de pastas |
+
+---
+
 ## Sistema de Arquivos Hierárquico MIGFS & Persistência em Disco
 
 O **MIGFS** gerencia a hierarquia de pastas e arquivos em memória RAM com sincronização bidirecional no **Disco Rígido ATA/IDE**:
@@ -662,6 +906,78 @@ flowchart TD
 
 ---
 
+## Terminal Avançado, Scrollbar & Ergonomia Linux
+
+O migOS implementa uma arquitetura de terminal profissional inspirada no **Windows Terminal, PowerShell e terminais Linux modernos**, combinando um **Buffer Unificado Contínuo de 500 linhas** com uma barra lateral de rolagem (*Scrollbar*) dinâmica renderizada em tempo real:
+
+```mermaid
+flowchart LR
+    subgraph Buffer Unificado de 500 Linhas [term_buffer: 500 x 80 Cells]
+        direction TB
+        B0["Linha 0: Topo do Histórico (Saídas antigas)"]
+        B1["... Linhas de Comandos, help, meminfo, scripts ..."]
+        B2["Linha N-30: Início da Viewport Visível"]
+        B3["Linhas N-29 a N: Tela Visível Atual (30 Linhas)"]
+        B4["Linha N: Prompt Ativo migOS:/docs> _"]
+    end
+
+    subgraph Viewport da Tela 640x480 [80x30 Caracteres]
+        V1["Colunas 0 a 78: Texto, Cores, Acentos e Cursor"]
+        V2["Coluna 79: Barra Lateral de Rolagem (Scrollbar)"]
+    end
+
+    B3 -->|Desliza Suavemente (term_view_row)| V1
+```
+
+### 1. Barra Lateral de Rolagem (*Scrollbar Visual*)
+- **Localização**: Coluna 79 (borda direita da tela).
+- **Componentes**:
+  - `▲` (Seta Superior): Indica o topo do histórico.
+  - `▼` (Seta Inferior): Indica a base da tela ao vivo.
+  - **Trilha Vertical (`|`)**: Canal contínuo de rolagem.
+  - **Bloco Deslizante (*Thumb `█`*)**: Bloco sólido em ciano dimensionado e posicionado proporcionalmente ao volume de texto gerado na sessão.
+- **Indicador de Rolagem no Topo (*Overlay Badge*)**: Exibe `[^ +N lin]` no canto superior direito quando o usuário está navegando no histórico. Ao digitar qualquer tecla, o terminal retorna automaticamente para a linha de comando ativa.
+
+### 2. Controles de Navegação e Rolagem:
+
+| Meio de Entrada | Ação / Atalho | Comportamento no Terminal |
+| :--- | :--- | :--- |
+| **Mouse** | `Roda para Cima (Scroll Wheel Up)` | Sobe a tela suavemente no histórico de saída |
+| **Mouse** | `Roda para Baixo (Scroll Wheel Down)` | Desce a tela em direção ao prompt ao vivo |
+| **Mouse** | `Clique na Seta Superior (▲)` | Rola 2 linhas para cima |
+| **Mouse** | `Clique na Seta Inferior (▼)` | Rola 2 linhas para baixo |
+| **Teclado** | `Page Up` | Rola 10 linhas para cima |
+| **Teclado** | `Page Down` | Rola 10 linhas para baixo |
+| **Teclado** | `Shift + Seta para Cima (↑)` | Rola suavemente 1 linha para cima |
+| **Teclado** | `Shift + Seta para Baixo (↓)` | Rola suavemente 1 linha para baixo |
+| **Teclado** | `Shift + Page Up` / `Ctrl + Home` | Salta imediatamente para o topo absoluto do histórico |
+| **Teclado** | `Shift + Page Down` / `Ctrl + End` | Retorna imediatamente para o prompt ao vivo |
+
+### 3. Atalhos de Edição de Linha (Padrão POSIX / Bash / Zsh):
+
+| Atalho | Função | Descrição |
+| :--- | :--- | :--- |
+| `←` / `→` | Mover Cursor | Move o cursor livremente para a esquerda ou direita na linha |
+| `Home` / `Ctrl+A` | Início da Linha | Posiciona o cursor no primeiro caractere do comando |
+| `End` / `Ctrl+E` | Fim da Linha | Posiciona o cursor após o último caractere digitado |
+| `Delete` | Deletar Caractere | Apaga o caractere sob o cursor |
+| `Backspace` | Apagar Anterior | Apaga o caractere à esquerda do cursor e desloca o texto |
+| `Tab` | Auto-Completar | Completa comandos, scripts, arquivos e pastas automaticamente |
+| `Ctrl + C` | Cancelar Linha | Aborta a linha digitada, imprime `^C` e gera um novo prompt |
+| `Ctrl + L` | Limpar Tela | Limpa o terminal e redessina o prompt preservando o comando atual |
+| `Ctrl + U` | Cortar para o Início | Apaga todo o conteúdo desde o cursor até o início da linha |
+| `Ctrl + K` | Cortar para o Fim | Apaga todo o conteúdo desde o cursor até o final da linha |
+| `Ctrl + W` | Apagar Palavra | Apaga a palavra anterior ao cursor |
+| `↑` / `↓` | Histórico | Navega entre os comandos anteriores executados na sessão |
+
+### 4. Histórico de Comandos e Reexecução Rápida:
+- O shell mantém um buffer com os últimos 32 comandos executados.
+- `history`: Lista todos os comandos numerados.
+- `!n`: Executa o comando de número `n` (ex: `!2` reexecuta o comando 2).
+- `!prefixo`: Executa o comando mais recente iniciado com aquele prefixo (ex: `!pok` executa `pokemon`).
+
+---
+
 ## Ciclo de Inicializacao (Boot Flow)
 
 ```mermaid
@@ -672,7 +988,7 @@ flowchart TD
     D --> E[Habilita Linha A20 via Porta 0x92 Fast Gate]
     E --> F[Carrega GDT Plana de 4GB para Ring 0]
     F --> G[Ativa bit PE em CR0 e Salto Longo para Modo Protegido 32-bit]
-    G --> H[kernel_entry.asm: Configura Pilha em 0x90000 e Zera BSS]
+    G --> H[kernel_entry.asm: Configura Pilha em 0x1FFFF0 e Zera BSS]
     H --> I[kmain em kernel.c: Inicializacao Ordenada do Kernel]
     
     subgraph Inicializacao do Kernel [kmain]
@@ -828,27 +1144,37 @@ sequenceDiagram
 
 | Comando | Sintaxe | Descricao |
 | :--- | :--- | :--- |
-| `help` | `help` | Exibe a lista completa de comandos disponiveis com sintaxe |
-| `clear` | `clear` | Limpa a tela do terminal e reposiciona o cursor no topo |
+| `help` | `help [cmd]` | Exibe a lista de comandos categorizada ou ajuda detalhada de um comando |
+| `clear` / `cls` | `clear` | Limpa a tela do terminal e reposiciona a janela de visualizacao no topo |
+| `history` | `history` | Lista todos os comandos executados na sessao com numeracao ordinal |
+| `!n` / `!str` | `!n` ou `!str` | Reexecuta o comando de numero `n` ou o mais recente iniciado por `str` |
 | `pwd` | `pwd` | Imprime o caminho do diretorio de trabalho corrente |
 | `cd` | `cd [pasta]` | Troca de diretorio (`cd docs`, `cd ..`, `cd /`) |
-| `mkdir` | `mkdir <pasta>` | Cria um novo subdiretorio no sistema de arquivos |
-| `rmdir` | `rmdir <pasta>` | Remove um diretorio vazio |
+| `mkdir` / `md` | `mkdir <pasta>` | Cria um novo subdiretorio no sistema de arquivos |
+| `rmdir` / `rd` | `rmdir <pasta>` | Remove um diretorio vazio |
 | `mv` | `mv <orig> <dest>` | Move ou renomeia um arquivo ou pasta |
 | `cp` | `cp <orig> <dest>` | Copia um arquivo ou pasta para um novo destino |
-| `ls` | `ls [dir] [-a]` | Lista arquivos e subdiretorios com indicacao de `<DIR>`, `<FILE>`, tamanho e flags |
-| `cat` | `cat <arquivo>` | Exibe o conteudo de texto do arquivo especificado |
-| `touch` | `touch <arquivo>` | Cria um novo arquivo vazio no diretorio |
+| `ls` / `dir` | `ls [dir] [-a]` | Lista arquivos e subdiretórios com indicacao de `<DIR>`, `<FILE>`, tamanho, carimbo de modificacao e atributos |
+| `cat` / `type` | `cat <arquivo>` | Exibe o conteudo de texto do arquivo especificado |
+| `touch` | `touch <arquivo>` | Cria um novo arquivo vazio ou atualiza o carimbo de data/hora de modificacao |
 | `write` | `write <arq> <txt>` | Escreve ou concatena uma cadeia de texto dentro de um arquivo |
-| `rm` | `rm <arquivo>` | Exclui um arquivo gravavel do sistema de arquivos |
-| `edit` / `nano` | `edit <arquivo>` | Abre o Editor de Texto Visual em tela cheia com atalhos `Ctrl+S` e `Ctrl+Q` |
+| `rm` / `del` / `unlink` | `rm <arquivo>` | Exclui um arquivo gravavel do sistema de arquivos |
+| `echo` | `echo <texto>` | Imprime uma mensagem de texto no terminal |
+| `free` | `free` | Exibe o diagnostico e ocupacao de memoria RAM fisica (PMM) e dinamica (KHeap) |
+| `df` | `df` | Exibe o espaco total, alocado e livre no disco rigido ATA / MIGFS |
+| `date` / `time` | `date` | Exibe a data e hora reais do CMOS RTC, tempo decorrido de atividade (uptime) e Unix epoch |
+| `rtc` / `clock` / `cmos` | `rtc` | Diagnostico tecnico do controlador CMOS/RTC, decodificacao BCD e status da bateria |
+| `beep` | `beep [freq] [dur]` | Emite um tom sonoro de frequencia (Hz) e duracao (ms) no PC Speaker (padrao: 440Hz 100ms) |
+| `sfx` | `sfx <nome>` | Toca efeito sonoro do sistema (`startup`, `alert`, `click`, `trash`, `success`) |
+| `mute` / `sound` | `mute [on/off]` | Silencia ou reativa a emissao sonora do PC Speaker |
+| `edit` / `nano` / `vi` / `vim` | `edit <arquivo>` | Abre o Editor de Texto Visual em tela cheia com atalhos `Ctrl+S` e `Ctrl+Q` |
 | `run` / `exec` | `run <script.txt>` | Executa um script em lote `.txt` com variaveis e comandos |
 | `calc` / `eval` | `calc <expressao>` | Avalia uma expressao matematica com parenteses e precedencia de operadores |
 | `pokemon` | `pokemon` | Inicia imediatamente o jogo **Pokémon Red Version** no emulador Game Boy |
 | `gameboy` / `gb` | `gameboy <rom.gb>` | Executa uma ROM de Nintendo Game Boy no emulador Peanut-GB |
 | `gbinfo` | `gbinfo <rom.gb>` | Exibe o cabecalho tecnico e metadados de um cartucho Game Boy |
 | `sync` | `sync` | Sincroniza e grava todas as alteracoes do sistema de arquivos no disco rigido ATA |
-| `meminfo` | `meminfo` | Exibe o diagnostico de memoria fisica (PMM) e memoria heap (KHeap) |
+| `meminfo` | `meminfo` | Exibe o diagnostico detalhado de memoria fisica (PMM) e memoria heap (KHeap) |
 | `memtest` | `memtest` | Executa bateria de testes de alocacao dinamica (`kmalloc` e `kfree`) |
 | `uptime` | `uptime` | Exibe o tempo de atividade do sistema em segundos e ticks do PIT |
 | `matrix` | `matrix` | Inicia o efeito visual da chuva de codigos verdes do filme Matrix |
@@ -882,8 +1208,11 @@ sequenceDiagram
    .\build.ps1 -NoRun
    ```
 
+> [!TIP]
+> **Áudio no QEMU**: O script `build.ps1` já inclui automaticamente os parâmetros `-audiodev dsound,id=snd0 -machine pcspk-audiodev=snd0` para conectar o PC Speaker virtual do migOS ao driver DirectSound do Windows. Caso execute o QEMU manualmente, lembre-se de passar esses parâmetros para habilitar o som.
+
 ---
 
 ## Autor
 
-Desenvolvido por **Miguel** como projeto pratico da disciplina de **Sistemas Operacionais (2026)**, explorando os conceitos fundamentais de construcao de sistemas operacionais monoliticos, programacao bare-metal em C e Assembly x86, gerenciamento de memoria, drivers de dispositivos e interfaces graficas.
+Desenvolvido por **Miguel Pereira** como projeto pratico da disciplina de **Sistemas Operacionais (2026)**, explorando os conceitos fundamentais de construcao de sistemas operacionais monoliticos, programacao bare-metal em C e Assembly x86, gerenciamento de memoria, drivers de dispositivos e interfaces graficas.

@@ -25,7 +25,9 @@ typedef struct migfs_disk_entry {
     uint32_t start_sector;
     uint32_t sector_count;
     uint32_t in_use;
-    uint32_t reserved[3];
+    uint32_t created_time;         // Timestamp UNIX de criacao (segundos)
+    uint32_t modified_time;        // Timestamp UNIX da ultima modificacao (segundos)
+    uint32_t reserved[1];          // Total 64 bytes
 } __attribute__((packed)) migfs_disk_entry_t;
 
 // Superbloco do MIGFS em disco (512 bytes)
@@ -47,6 +49,8 @@ typedef struct migfs_file {
     char* data;
     uint32_t flags;
     int in_use;
+    uint32_t created_time;
+    uint32_t modified_time;
 } migfs_file_t;
 
 // Item de diretorio retornado na listagem de pastas
@@ -56,6 +60,8 @@ typedef struct {
     uint32_t size;
     uint32_t flags;
     int is_dir;
+    uint32_t created_time;
+    uint32_t modified_time;
 } migfs_dir_item_t;
 
 // Inicializacao do sistema de arquivos e carga dos arquivos embutidos / do disco
@@ -74,6 +80,7 @@ migfs_file_t* migfs_open(const char* name);
 const char*   migfs_read(const char* name);
 int           migfs_write(const char* name, const char* content, size_t size);
 int           migfs_append(const char* name, const char* content, size_t size);
+int           migfs_touch(const char* name);
 int           migfs_delete(const char* name);
 int           migfs_exists(const char* name);
 int           load_doom_wad_from_disk(void);

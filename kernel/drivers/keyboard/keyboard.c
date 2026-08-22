@@ -52,7 +52,8 @@ static volatile int alt_down = 0;
 static volatile int caps_lock = 0;
 
 static char input_buffer[BUFFER_SIZE];
-static int buffer_index = 0;
+static int buffer_len = 0;
+static int cursor_pos = 0;
 static int is_extended = 0;
 static volatile int key_pressed_event = 0;
 
@@ -72,6 +73,10 @@ void keyboard_set_doom_mode(int enabled) {
     doom_mode_active = enabled;
     doom_q_head = 0;
     doom_q_tail = 0;
+}
+
+int keyboard_is_doom_mode(void) {
+    return doom_mode_active;
 }
 
 static void doom_enqueue_key(int pressed, unsigned char key) {
@@ -117,12 +122,58 @@ void keyboard_clear_key(void) {
     key_pressed_event = 0;
 }
 
+static void cursor_move_left(void) {
+    if (cursor_pos > 0) {
+        cursor_pos--;
+        int r, c;
+        vga_get_cursor(&r, &c);
+        if (c > 0) {
+            vga_set_cursor(r, c - 1);
+        } else if (r > 0) {
+            vga_set_cursor(r - 1, VGA_WIDTH - 1);
+        }
+    }
+}
+
+static void cursor_move_right(void) {
+    if (cursor_pos < buffer_len) {
+        cursor_pos++;
+        int r, c;
+        vga_get_cursor(&r, &c);
+        if (c < VGA_WIDTH - 1) {
+            vga_set_cursor(r, c + 1);
+        } else if (r < VGA_HEIGHT - 1) {
+            vga_set_cursor(r + 1, 0);
+        }
+    }
+}
+
+static void cursor_move_home(void) {
+    while (cursor_pos > 0) {
+        cursor_move_left();
+    }
+}
+
+static void cursor_move_end(void) {
+    while (cursor_pos < buffer_len) {
+        cursor_move_right();
+    }
+}
+
 static void replace_input_line(const char* new_text) {
     if (!new_text) return;
 
-    while (buffer_index > 0) {
-        vga_putc('\b');
-        buffer_index--;
+    cursor_move_home();
+
+    int old_len = buffer_len;
+    for (int i = 0; i < old_len; i++) {
+        vga_putc(' ');
+    }
+    for (int i = 0; i < old_len; i++) {
+        int r, c;
+        vga_get_cursor(&r, &c);
+        if (c > 0) vga_set_cursor(r, c - 1);
+        else if (r > 0) vga_set_cursor(r - 1, VGA_WIDTH - 1);
     }
 
     int i = 0;
@@ -131,8 +182,94 @@ static void replace_input_line(const char* new_text) {
         vga_putc(new_text[i]);
         i++;
     }
-    buffer_index = i;
-    input_buffer[buffer_index] = '\0';
+    buffer_len = i;
+    cursor_pos = buffer_len;
+    input_buffer[buffer_len] = '\0';
+}
+
+static void insert_char(char ch) {
+    if (buffer_len >= BUFFER_SIZE - 1) return;
+
+    if (cursor_pos == buffer_len) {
+        input_buffer[cursor_pos++] = ch;
+        buffer_len++;
+        input_buffer[buffer_len] = '\0';
+        vga_putc(ch);
+    } else {
+        for (int i = buffer_len; i > cursor_pos; i--) {
+            input_buffer[i] = input_buffer[i - 1];
+        }
+        input_buffer[cursor_pos] = ch;
+        buffer_len++;
+        input_buffer[buffer_len] = '\0';
+
+        int start_r, start_c;
+        vga_get_cursor(&start_r, &start_c);
+
+        for (int i = cursor_pos; i < buffer_len; i++) {
+            vga_putc(input_buffer[i]);
+        }
+
+        cursor_pos++;
+
+        int target_c = start_c + 1;
+        int target_r = start_r;
+        if (target_c >= VGA_WIDTH) {
+            target_c = 0;
+            target_r++;
+        }
+        if (target_r < VGA_HEIGHT) {
+            vga_set_cursor(target_r, target_c);
+        }
+    }
+}
+
+static void delete_backspace(void) {
+    if (cursor_pos > 0) {
+        if (cursor_pos == buffer_len) {
+            cursor_pos--;
+            buffer_len--;
+            input_buffer[buffer_len] = '\0';
+            vga_putc('\b');
+        } else {
+            cursor_move_left();
+            int cur_r, cur_c;
+            vga_get_cursor(&cur_r, &cur_c);
+
+            for (int i = cursor_pos; i < buffer_len - 1; i++) {
+                input_buffer[i] = input_buffer[i + 1];
+            }
+            buffer_len--;
+            input_buffer[buffer_len] = '\0';
+
+            for (int i = cursor_pos; i < buffer_len; i++) {
+                vga_putc(input_buffer[i]);
+            }
+            vga_putc(' ');
+
+            vga_set_cursor(cur_r, cur_c);
+        }
+    }
+}
+
+static void delete_char(void) {
+    if (cursor_pos < buffer_len) {
+        int cur_r, cur_c;
+        vga_get_cursor(&cur_r, &cur_c);
+
+        for (int i = cursor_pos; i < buffer_len - 1; i++) {
+            input_buffer[i] = input_buffer[i + 1];
+        }
+        buffer_len--;
+        input_buffer[buffer_len] = '\0';
+
+        for (int i = cursor_pos; i < buffer_len; i++) {
+            vga_putc(input_buffer[i]);
+        }
+        vga_putc(' ');
+
+        vga_set_cursor(cur_r, cur_c);
+    }
 }
 
 static unsigned char translate_scancode_to_doom(unsigned char code, int extended) {
@@ -251,19 +388,49 @@ void keyboard_handler_c(void) {
 
         if (!is_release) {
             if (code == 0x48) { // Seta para CIMA
-                if (!matrix_running) {
+                if (shift_down) {
+                    vga_scroll_history_up(1);
+                } else if (!matrix_running) {
                     const char* prev_cmd = shell_history_up();
                     if (prev_cmd) replace_input_line(prev_cmd);
                 }
             } else if (code == 0x50) { // Seta para BAIXO
-                if (!matrix_running) {
+                if (shift_down) {
+                    vga_scroll_history_down(1);
+                } else if (!matrix_running) {
                     const char* next_cmd = shell_history_down();
                     if (next_cmd) replace_input_line(next_cmd);
                 }
+            } else if (code == 0x4B) { // Seta para ESQUERDA
+                cursor_move_left();
+            } else if (code == 0x4D) { // Seta para DIREITA
+                cursor_move_right();
+            } else if (code == 0x47) { // Home (Inicio da linha)
+                if (shift_down || ctrl_down) {
+                    vga_scroll_history_up(9999);
+                } else {
+                    cursor_move_home();
+                }
+            } else if (code == 0x4F) { // End (Fim da linha)
+                if (shift_down || ctrl_down) {
+                    vga_scroll_history_reset();
+                } else {
+                    cursor_move_end();
+                }
+            } else if (code == 0x53) { // Delete (Apaga caractere sob o cursor)
+                delete_char();
             } else if (code == 0x49) { // Page Up
-                vga_scroll_history_up(10);
+                if (shift_down) {
+                    vga_scroll_history_up(9999); // Topo
+                } else {
+                    vga_scroll_history_up(10);
+                }
             } else if (code == 0x51) { // Page Down
-                vga_scroll_history_down(10);
+                if (shift_down) {
+                    vga_scroll_history_reset(); // Fundo
+                } else {
+                    vga_scroll_history_down(10);
+                }
             }
         }
 
@@ -276,8 +443,104 @@ void keyboard_handler_c(void) {
         return;
     }
 
+    // Atalhos com Ctrl (POSIX / Linux CLI)
+    if (!is_release && ctrl_down) {
+        if (code == 0x2E) { // Ctrl + C (Cancelar linha)
+            vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+            vga_puts("^C\n");
+            buffer_len = 0;
+            cursor_pos = 0;
+            input_buffer[0] = '\0';
+            shell_print_prompt();
+            pic_send_eoi(1);
+            return;
+        } else if (code == 0x26) { // Ctrl + L (Limpar tela e restaurar prompt)
+            vga_clear();
+            shell_print_prompt();
+            vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+            vga_puts(input_buffer);
+            int cur_temp = cursor_pos;
+            cursor_pos = buffer_len;
+            while (cursor_pos > cur_temp) {
+                cursor_move_left();
+            }
+            pic_send_eoi(1);
+            return;
+        } else if (code == 0x16) { // Ctrl + U (Apagar ate o inicio da linha)
+            if (cursor_pos > 0) {
+                cursor_move_home();
+                int old_len = buffer_len;
+                int shift_count = cursor_pos;
+                for (int i = 0; i < buffer_len - shift_count; i++) {
+                    input_buffer[i] = input_buffer[i + shift_count];
+                }
+                buffer_len -= shift_count;
+                cursor_pos = 0;
+                input_buffer[buffer_len] = '\0';
+                for (int i = 0; i < buffer_len; i++) {
+                    vga_putc(input_buffer[i]);
+                }
+                for (int i = buffer_len; i < old_len; i++) {
+                    vga_putc(' ');
+                }
+                cursor_move_home();
+            }
+            pic_send_eoi(1);
+            return;
+        } else if (code == 0x25) { // Ctrl + K (Apagar ate o fim da linha)
+            if (cursor_pos < buffer_len) {
+                int old_len = buffer_len;
+                int cur_r, cur_c;
+                vga_get_cursor(&cur_r, &cur_c);
+                input_buffer[cursor_pos] = '\0';
+                buffer_len = cursor_pos;
+                for (int i = cursor_pos; i < old_len; i++) {
+                    vga_putc(' ');
+                }
+                vga_set_cursor(cur_r, cur_c);
+            }
+            pic_send_eoi(1);
+            return;
+        } else if (code == 0x11) { // Ctrl + W (Apagar palavra anterior)
+            while (cursor_pos > 0 && input_buffer[cursor_pos - 1] == ' ') {
+                delete_backspace();
+            }
+            while (cursor_pos > 0 && input_buffer[cursor_pos - 1] != ' ') {
+                delete_backspace();
+            }
+            pic_send_eoi(1);
+            return;
+        } else if (code == 0x1E) { // Ctrl + A (Home)
+            cursor_move_home();
+            pic_send_eoi(1);
+            return;
+        } else if (code == 0x12) { // Ctrl + E (End)
+            cursor_move_end();
+            pic_send_eoi(1);
+            return;
+        }
+    }
+
     if (!is_release) {
-        if (code < (int)sizeof(scancode_ascii_lower)) {
+        if (code == 0x0F) { // Tecla TAB (Auto-completar inteligente)
+            shell_autocomplete(input_buffer, &cursor_pos, &buffer_len);
+            pic_send_eoi(1);
+            return;
+        } else if (code == 0x0E) { // Backspace
+            delete_backspace();
+            pic_send_eoi(1);
+            return;
+        } else if (code == 0x1C) { // Enter (\n)
+            input_buffer[buffer_len] = '\0';
+            vga_putc('\n');
+
+            shell_post_command(input_buffer);
+            buffer_len = 0;
+            cursor_pos = 0;
+            input_buffer[0] = '\0';
+            pic_send_eoi(1);
+            return;
+        } else if (code < (int)sizeof(scancode_ascii_lower)) {
             int use_upper = shift_down;
             char lower_c = scancode_ascii_lower[code];
             if (caps_lock && lower_c >= 'a' && lower_c <= 'z') {
@@ -285,25 +548,9 @@ void keyboard_handler_c(void) {
             }
             char ch = use_upper ? scancode_ascii_upper[code] : scancode_ascii_lower[code];
 
-            if (ch == '\b') {
-                if (buffer_index > 0) {
-                    buffer_index--;
-                    input_buffer[buffer_index] = '\0';
-                    vga_putc('\b');
-                }
-            } else if (ch == '\n') {
-                input_buffer[buffer_index] = '\0';
-                vga_putc('\n');
-
-                shell_post_command(input_buffer);
-                buffer_index = 0;
-                input_buffer[0] = '\0';
-            } else if (ch) {
-                if (buffer_index < BUFFER_SIZE - 1) {
-                    input_buffer[buffer_index++] = ch;
-                    input_buffer[buffer_index] = '\0';
-                    vga_putc(ch);
-                }
+            if (ch && ch != '\b' && ch != '\n' && ch != '\t') {
+                vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+                insert_char(ch);
             }
         }
     }
@@ -314,7 +561,8 @@ void keyboard_handler_c(void) {
 extern void keyboard_isr_wrapper(void);
 
 void keyboard_init(void) {
-    buffer_index = 0;
+    buffer_len = 0;
+    cursor_pos = 0;
     input_buffer[0] = '\0';
     key_pressed_event = 0;
     doom_mode_active = 0;

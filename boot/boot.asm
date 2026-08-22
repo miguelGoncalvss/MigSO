@@ -27,7 +27,12 @@ start:
     ; Carrega o Kernel do disco para 0x1000:0x0000 (0x10000 linear)
     call disk_load_chunks
 
-    ; Desabilita interrupções da BIOS antes de mudar para Protected Mode
+    ; Habilita a linha de endereco A20 (Fast A20)
+    in al, 0x92
+    or al, 2
+    out 0x92, al
+
+    ; Desabilita interrupcoes da BIOS antes de mudar para Protected Mode
     cli
     xor ax, ax
     mov ds, ax
@@ -153,8 +158,8 @@ protected_mode_start:
     mov fs, ax
     mov gs, ax
 
-    mov ebp, 0x90000
-    mov esp, 0x90000
+    mov ebp, 0x1FFFF0
+    mov esp, 0x1FFFF0
 
     ; Salta para o ponto de entrada do kernel compilado em C
     jmp 0x10000

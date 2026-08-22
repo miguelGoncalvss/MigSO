@@ -29,6 +29,7 @@ void vga_init(void);
 void vga_clear(void);
 void vga_set_color(unsigned char fg, unsigned char bg);
 void vga_set_cursor(int row, int col);
+void vga_get_cursor(int* row, int* col);
 void vga_set_cell(int x, int y, char c, unsigned char fg, unsigned char bg);
 void vga_putc(char c);
 void vga_puts(const char* str);

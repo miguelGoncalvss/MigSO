@@ -5,6 +5,11 @@ SECTIONS
     .text : { *(.text*) }
     .data : { *(.data*) }
     .rdata : { *(.rdata*) }
-    .bss : { *(.bss*) }
+    .bss : {
+        __bss_start = .;
+        *(.bss*)
+        *(COMMON)
+        __bss_end = .;
+    }
     /DISCARD/ : { *(.reloc*) *(.pdata*) *(.xdata*) *(.eh_frame*) *(.comment) }
 }

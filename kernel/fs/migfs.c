@@ -3,6 +3,7 @@
 #include <libc/string.h>
 #include <libc/stdio.h>
 #include <drivers/ata.h>
+#include <drivers/rtc.h>
 
 static migfs_file_t file_table[MIGFS_MAX_FILES];
 static int migfs_is_disk_backed = 0;
@@ -29,6 +30,8 @@ int migfs_sync_to_disk(void) {
             sync_entries[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
             sync_entries[i].size = file_table[i].size;
             sync_entries[i].flags = file_table[i].flags;
+            sync_entries[i].created_time = file_table[i].created_time;
+            sync_entries[i].modified_time = file_table[i].modified_time;
             sync_entries[i].in_use = 1;
 
             uint32_t sectors = (file_table[i].size + 511) / 512;
@@ -109,12 +112,16 @@ int migfs_load_from_disk(void) {
         memset(&file_table[i], 0, sizeof(migfs_file_t));
     }
 
+    uint32_t now = rtc_get_unix_timestamp();
+
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
         if (load_entries[i].in_use && load_entries[i].name[0] != '\0') {
             strncpy(file_table[i].name, load_entries[i].name, MIGFS_MAX_FILENAME - 1);
             file_table[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
             file_table[i].size = load_entries[i].size;
             file_table[i].flags = load_entries[i].flags;
+            file_table[i].created_time = load_entries[i].created_time ? load_entries[i].created_time : now;
+            file_table[i].modified_time = load_entries[i].modified_time ? load_entries[i].modified_time : now;
             file_table[i].in_use = 1;
 
             file_table[i].data = (char*)kmalloc(load_entries[i].size + 1);
@@ -433,6 +440,8 @@ int migfs_create(const char* name, const char* content, size_t size, uint32_t fl
         return migfs_write(target, content, size);
     }
 
+    uint32_t now = rtc_get_unix_timestamp();
+
     // Localiza um slot livre na tabela de arquivos
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
         if (!file_table[i].in_use) {
@@ -440,6 +449,8 @@ int migfs_create(const char* name, const char* content, size_t size, uint32_t fl
             file_table[i].name[MIGFS_MAX_FILENAME - 1] = '\0';
             file_table[i].size = size;
             file_table[i].flags = flags;
+            file_table[i].created_time = now;
+            file_table[i].modified_time = now;
 
             // Aloca buffer no Heap do Kernel via kmalloc
             file_table[i].data = (char*)kmalloc(size + 1);
@@ -470,6 +481,8 @@ int migfs_add_buffer(const char* name, char* data, size_t size, uint32_t flags) 
     const char* target = name;
     if (target[0] == '/') target++;
 
+    uint32_t now = rtc_get_unix_timestamp();
+
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
         if (!file_table[i].in_use) {
             strncpy(file_table[i].name, target, MIGFS_MAX_FILENAME - 1);
@@ -477,6 +490,8 @@ int migfs_add_buffer(const char* name, char* data, size_t size, uint32_t flags) 
             file_table[i].size = size;
             file_table[i].flags = flags;
             file_table[i].data = data;
+            file_table[i].created_time = now;
+            file_table[i].modified_time = now;
             file_table[i].in_use = 1;
             return 0;
         }
@@ -581,6 +596,7 @@ int migfs_write(const char* name, const char* content, size_t size) {
     }
     f->data[size] = '\0';
     f->size = size;
+    f->modified_time = rtc_get_unix_timestamp();
 
     // Persiste automaticamente no disco ATA
     migfs_sync_to_disk();
@@ -609,7 +625,21 @@ int migfs_append(const char* name, const char* content, size_t size) {
     memcpy(f->data + f->size, content, size);
     f->size = new_size;
     f->data[new_size] = '\0';
+    f->modified_time = rtc_get_unix_timestamp();
 
+    migfs_sync_to_disk();
+    return 0;
+}
+
+int migfs_touch(const char* name) {
+    if (!name || name[0] == '\0') return -1;
+
+    migfs_file_t* f = migfs_open(name);
+    if (!f) {
+        return migfs_create(name, "", 0, 0);
+    }
+
+    f->modified_time = rtc_get_unix_timestamp();
     migfs_sync_to_disk();
     return 0;
 }
@@ -633,6 +663,8 @@ int migfs_delete(const char* name) {
     f->size = 0;
     f->flags = 0;
     f->in_use = 0;
+    f->created_time = 0;
+    f->modified_time = 0;
 
     migfs_sync_to_disk();
     return 0;
@@ -687,6 +719,8 @@ int migfs_mkdir(const char* path) {
         return -2; // Ja existe
     }
 
+    uint32_t now = rtc_get_unix_timestamp();
+
     for (size_t i = 0; i < MIGFS_MAX_FILES; i++) {
         if (!file_table[i].in_use) {
             strncpy(file_table[i].name, target, MIGFS_MAX_FILENAME - 1);
@@ -694,6 +728,8 @@ int migfs_mkdir(const char* path) {
             file_table[i].size = 0;
             file_table[i].data = NULL;
             file_table[i].flags = MIGFS_FILE_DIRECTORY;
+            file_table[i].created_time = now;
+            file_table[i].modified_time = now;
             file_table[i].in_use = 1;
 
             migfs_sync_to_disk();
@@ -808,6 +844,7 @@ int migfs_move(const char* src, const char* dest) {
 
     strncpy(sf->name, new_path, MIGFS_MAX_FILENAME - 1);
     sf->name[MIGFS_MAX_FILENAME - 1] = '\0';
+    sf->modified_time = rtc_get_unix_timestamp();
 
     migfs_sync_to_disk();
     return 0;
@@ -876,6 +913,8 @@ int migfs_get_dir_items(const char* dir_path, migfs_dir_item_t* items, size_t ma
         items[count].size = 0;
         items[count].flags = MIGFS_FILE_DIRECTORY;
         items[count].is_dir = 1;
+        items[count].created_time = 0;
+        items[count].modified_time = 0;
         count++;
     }
 
@@ -898,6 +937,8 @@ int migfs_get_dir_items(const char* dir_path, migfs_dir_item_t* items, size_t ma
                 items[count].size = file_table[i].size;
                 items[count].flags = file_table[i].flags;
                 items[count].is_dir = (file_table[i].flags & MIGFS_FILE_DIRECTORY) ? 1 : 0;
+                items[count].created_time = file_table[i].created_time;
+                items[count].modified_time = file_table[i].modified_time;
                 count++;
             } else {
                 size_t dlen = slash - fname;
@@ -920,6 +961,8 @@ int migfs_get_dir_items(const char* dir_path, migfs_dir_item_t* items, size_t ma
                     items[count].size = 0;
                     items[count].flags = MIGFS_FILE_DIRECTORY;
                     items[count].is_dir = 1;
+                    items[count].created_time = file_table[i].created_time;
+                    items[count].modified_time = file_table[i].modified_time;
                     count++;
                 }
             }
@@ -935,6 +978,8 @@ int migfs_get_dir_items(const char* dir_path, migfs_dir_item_t* items, size_t ma
                     items[count].size = file_table[i].size;
                     items[count].flags = file_table[i].flags;
                     items[count].is_dir = (file_table[i].flags & MIGFS_FILE_DIRECTORY) ? 1 : 0;
+                    items[count].created_time = file_table[i].created_time;
+                    items[count].modified_time = file_table[i].modified_time;
                     count++;
                 } else {
                     size_t dlen = slash - rel;
@@ -957,6 +1002,8 @@ int migfs_get_dir_items(const char* dir_path, migfs_dir_item_t* items, size_t ma
                         items[count].size = 0;
                         items[count].flags = MIGFS_FILE_DIRECTORY;
                         items[count].is_dir = 1;
+                        items[count].created_time = file_table[i].created_time;
+                        items[count].modified_time = file_table[i].modified_time;
                         count++;
                     }
                 }
