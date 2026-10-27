@@ -20,7 +20,7 @@ typedef struct {
     int len;
 } editor_line_t;
 
-static editor_line_t lines[MAX_EDITOR_LINES];
+static editor_line_t* lines = NULL;
 static int line_count = 1;
 static int cur_row = 0;
 static int cur_col = 0;
@@ -316,6 +316,13 @@ static void editor_delete_char(void) {
 }
 
 void editor_open_cli(const char* filename) {
+    lines = (editor_line_t*)kmalloc(sizeof(editor_line_t) * MAX_EDITOR_LINES);
+    if (!lines) {
+        vga_puts("[ERRO] Memoria insuficiente para o editor!\n");
+        return;
+    }
+    memset(lines, 0, sizeof(editor_line_t) * MAX_EDITOR_LINES);
+
     if (!filename || filename[0] == '\0') {
         filename = "sem_titulo.txt";
     }
@@ -425,5 +432,9 @@ void editor_open_cli(const char* filename) {
     }
 
     keyboard_set_doom_mode(0);
+    if (lines) {
+        kfree(lines);
+        lines = NULL;
+    }
     vga_clear();
 }

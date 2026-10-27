@@ -73,7 +73,7 @@ isr_common_stub:
 
     push esp            ; Passa ponteiro da struct registers_t para a funcao C
     call _isr_handler_c
-    add esp, 4          ; Limpa argumento da pilha
+    mov esp, eax        ; Atualiza ESP caso o tratador tenha trocado de tarefa (ex: SegFault em Ring 3)
 
     pop eax             ; Restaura segmento original
     mov ds, ax
@@ -86,13 +86,15 @@ isr_common_stub:
     iret
 
 ; ============================================================
-; ISR do Timer PIT (IRQ 0 / Vetor 32)
+; ISR do Timer PIT (IRQ 0 / Vetor 32 - Scheduler Preemptivo)
 ; ============================================================
 global _timer_isr_wrapper
 global timer_isr_wrapper
 
 _timer_isr_wrapper:
 timer_isr_wrapper:
+    push dword 0        ; Dummy error code
+    push dword 32       ; Vetor 32 (IRQ 0)
     pusha
 
     mov ax, ds
@@ -104,7 +106,9 @@ timer_isr_wrapper:
     mov fs, ax
     mov gs, ax
 
+    push esp
     call _timer_handler_c
+    mov esp, eax        ; Efetua a troca atomica de contexto (novo ESP retornado pelo escalonador)
 
     pop eax
     mov ds, ax
@@ -113,6 +117,7 @@ timer_isr_wrapper:
     mov gs, ax
 
     popa
+    add esp, 8
     iret
 
 ; ============================================================
@@ -174,4 +179,41 @@ mouse_isr_wrapper:
 
     popa
     iret
+
+; ============================================================
+; ISR das Syscalls (Vetor 128 / 0x80 - Ring 3 -> Ring 0)
+; ============================================================
+global _syscall_isr_wrapper
+global syscall_isr_wrapper
+extern _syscall_handler_c
+
+_syscall_isr_wrapper:
+syscall_isr_wrapper:
+    push dword 0        ; Dummy error code
+    push dword 128      ; Vetor 128 (0x80)
+    pusha
+
+    mov ax, ds
+    push eax
+
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    push esp
+    call _syscall_handler_c
+    mov esp, eax        ; Troca de pilha caso a syscall tenha suspendido a thread (ex: sys_yield/sys_exit)
+
+    pop eax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    popa
+    add esp, 8
+    iret
+
 

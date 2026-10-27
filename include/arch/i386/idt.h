@@ -15,6 +15,8 @@ struct idt_ptr {
 } __attribute__((packed));
 
 void idt_set_gate(int n, unsigned int handler);
+void idt_set_gate_flags(int n, unsigned int handler, unsigned char flags);
+void idt_set_gate_user(int n, unsigned int handler);
 void idt_init(void);
 
 #endif // ARCH_I386_IDT_H

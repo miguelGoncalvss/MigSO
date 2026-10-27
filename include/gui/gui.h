@@ -34,6 +34,7 @@ typedef struct {
 
 // Ponto de entrada do ambiente grafico (bloqueia ate o usuario fechar/ESC)
 void gui_launch_desktop(void);
+void gui_launch_desenho(void);
 
 // Primitivas de renderizacao no backbuffer (32-bit ARGB)
 void gui_draw_pixel(int x, int y, uint32_t color);

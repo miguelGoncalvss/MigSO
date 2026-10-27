@@ -10,6 +10,6 @@ typedef struct {
 } registers_t;
 
 void isr_init(void);
-void isr_handler_c(registers_t* regs);
+unsigned int isr_handler_c(registers_t* regs);
 
 #endif // ARCH_I386_ISR_H

@@ -3,14 +3,22 @@
 #include <arch/i386/idt.h>
 #include <arch/i386/pic.h>
 
+#include <kernel/task.h>
+
 static volatile unsigned int timer_ticks = 0;
 static unsigned int timer_frequency = 100;
 
 extern void timer_isr_wrapper(void);
 
-void timer_handler_c(void) {
+unsigned int timer_handler_c(registers_t* regs) {
     timer_ticks++;
     pic_send_eoi(0);
+
+    if (task_is_multitasking_active()) {
+        return scheduler_tick(regs);
+    }
+
+    return (unsigned int)regs;
 }
 
 void timer_init(unsigned int freq) {
@@ -46,6 +54,10 @@ void timer_wait(unsigned int ticks) {
 
 void sleep(unsigned int ms) {
     if (ms == 0) return;
+    if (task_is_multitasking_active() && task_get_current() != NULL) {
+        task_sleep(ms);
+        return;
+    }
     unsigned int ticks = (ms * timer_frequency) / 1000;
     if (ticks == 0) ticks = 1;
     timer_wait(ticks);

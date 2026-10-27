@@ -5,7 +5,10 @@
 #define PIT_COMMAND_PORT   0x43
 #define PIT_CHANNEL0_PORT  0x40
 
+#include <arch/i386/isr.h>
+
 void timer_init(unsigned int freq);
+unsigned int timer_handler_c(registers_t* regs);
 void timer_wait(unsigned int ticks);
 void sleep(unsigned int ms);
 unsigned int get_uptime(void);
