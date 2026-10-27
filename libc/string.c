@@ -143,9 +143,39 @@ char* strdup(const char* s) {
 
 void* memset(void* dest, int val, size_t len) {
     if (!dest || len == 0) return dest;
-    unsigned char* ptr = (unsigned char*)dest;
+    unsigned char* d = (unsigned char*)dest;
+    uint8_t byte_val = (uint8_t)val;
+
+    // Alinha o ponteiro para multiplo de 4 bytes
+    while (len > 0 && ((uint32_t)d & 3) != 0) {
+        *d++ = byte_val;
+        len--;
+    }
+
+    if (len >= 4) {
+        uint32_t dword_val = (uint32_t)byte_val;
+        dword_val |= (dword_val << 8);
+        dword_val |= (dword_val << 16);
+
+        uint32_t* d32 = (uint32_t*)d;
+        size_t dwords = len >> 2;
+        while (dwords >= 4) {
+            d32[0] = dword_val;
+            d32[1] = dword_val;
+            d32[2] = dword_val;
+            d32[3] = dword_val;
+            d32 += 4;
+            dwords -= 4;
+        }
+        while (dwords--) {
+            *d32++ = dword_val;
+        }
+        d = (unsigned char*)d32;
+        len &= 3;
+    }
+
     while (len--) {
-        *ptr++ = (unsigned char)val;
+        *d++ = byte_val;
     }
     return dest;
 }
@@ -154,6 +184,34 @@ void* memcpy(void* dest, const void* src, size_t len) {
     if (!dest || !src || len == 0) return dest;
     unsigned char* d = (unsigned char*)dest;
     const unsigned char* s = (const unsigned char*)src;
+
+    // Se ambos os ponteiros puderem ser alinhados juntos em 4 bytes
+    if (len >= 8 && (((uint32_t)d & 3) == ((uint32_t)s & 3))) {
+        while (((uint32_t)d & 3) != 0 && len > 0) {
+            *d++ = *s++;
+            len--;
+        }
+
+        uint32_t* d32 = (uint32_t*)d;
+        const uint32_t* s32 = (const uint32_t*)s;
+        size_t dwords = len >> 2;
+        while (dwords >= 4) {
+            d32[0] = s32[0];
+            d32[1] = s32[1];
+            d32[2] = s32[2];
+            d32[3] = s32[3];
+            d32 += 4;
+            s32 += 4;
+            dwords -= 4;
+        }
+        while (dwords--) {
+            *d32++ = *s32++;
+        }
+        d = (unsigned char*)d32;
+        s = (const unsigned char*)s32;
+        len &= 3;
+    }
+
     while (len--) {
         *d++ = *s++;
     }
@@ -161,17 +219,39 @@ void* memcpy(void* dest, const void* src, size_t len) {
 }
 
 void* memmove(void* dest, const void* src, size_t len) {
-    if (!dest || !src || len == 0) return dest;
+    if (!dest || !src || len == 0 || dest == src) return dest;
     unsigned char* d = (unsigned char*)dest;
     const unsigned char* s = (const unsigned char*)src;
 
-    if (d < s) {
-        while (len--) {
-            *d++ = *s++;
-        }
+    if (d < s || d >= s + len) {
+        return memcpy(dest, src, len);
     } else {
         d += len;
         s += len;
+        if (len >= 8 && (((uint32_t)d & 3) == ((uint32_t)s & 3))) {
+            while (((uint32_t)d & 3) != 0 && len > 0) {
+                *--d = *--s;
+                len--;
+            }
+            uint32_t* d32 = (uint32_t*)d;
+            const uint32_t* s32 = (const uint32_t*)s;
+            size_t dwords = len >> 2;
+            while (dwords >= 4) {
+                d32 -= 4;
+                s32 -= 4;
+                d32[3] = s32[3];
+                d32[2] = s32[2];
+                d32[1] = s32[1];
+                d32[0] = s32[0];
+                dwords -= 4;
+            }
+            while (dwords--) {
+                *--d32 = *--s32;
+            }
+            d = (unsigned char*)d32;
+            s = (const unsigned char*)s32;
+            len &= 3;
+        }
         while (len--) {
             *--d = *--s;
         }

@@ -21,4 +21,18 @@ void gameboy_sync_save(void);
  */
 void gameboy_print_cart_info(const char* rom_filename);
 
+/**
+ * Funcoes do Emulador Game Boy para execucao em Janela no Ambiente Grafico (GUI)
+ */
+int  gameboy_gui_load_rom(const char* rom_filename);
+void gameboy_gui_step_frame(void);
+void gameboy_gui_handle_key(int pressed, unsigned char key);
+const uint32_t* gameboy_gui_get_screen(void);
+int  gameboy_gui_is_loaded(void);
+const char* gameboy_gui_get_rom_title(void);
+void gameboy_gui_cycle_palette(void);
+const char* gameboy_gui_get_palette_name(void);
+void gameboy_gui_reset(void);
+void gameboy_gui_cleanup(void);
+
 #endif // EMULATOR_GAMEBOY_H

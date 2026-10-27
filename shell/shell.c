@@ -10,6 +10,10 @@
 #include <arch/i386/reboot.h>
 #include <kernel/pmm.h>
 #include <kernel/kheap.h>
+#include <kernel/vmm.h>
+#include <kernel/task.h>
+#include <kernel/syscall.h>
+#include <libc/syscall.h>
 #include <fs/migfs.h>
 #include <gui/gui.h>
 #include <editor/editor.h>
@@ -18,7 +22,38 @@
 #include <libc/string.h>
 #include <libc/stdlib.h>
 
+static void demo_kthread_worker(void) {
+    for (int i = 1; i <= 6; i++) {
+        sleep(1000);
+    }
+}
 
+static void demo_user_process(void) {
+    sys_puts("\n[USER APP Ring 3] Processo isolado em execucao!\n");
+    sys_puts("[USER APP Ring 3] Executando com seguranca em Ring 3 (CPL = 3)...\n");
+    for (int i = 1; i <= 3; i++) {
+        sys_puts("[USER APP Ring 3] Tarefa preemptiva concorrente em background...\n");
+        sys_sleep(1000);
+    }
+    sys_puts("[USER APP Ring 3] Encerrando via Syscall sys_exit(0)...\n");
+    sys_exit(0);
+}
+
+static void demo_fault_isolation_process(void) {
+    sys_puts("\n[TESTE SEGURANCA Ring 3] Processo tentando violar memoria do Kernel (0x00100000)...\n");
+    sys_sleep(300);
+    // Tentativa ilegal de escrita em pagina de Supervisor (Ring 0):
+    *(volatile uint32_t*)0x00100000 = 0xDEADBEEF;
+    sys_puts("[ERRO] Nao deveria alcancar aqui!\n");
+    sys_exit(0);
+}
+
+static void demo_gpf_isolation_process(void) {
+    sys_puts("\n[TESTE SEGURANCA Ring 3] Processo tentando executar instrucao privilegiada 'cli'...\n");
+    sys_sleep(300);
+    __asm__ volatile ("cli");
+    sys_exit(0);
+}
 
 volatile int matrix_running = 0;
 
@@ -166,7 +201,7 @@ void shell_autocomplete(char* buffer, int* cursor_pos, int* buffer_len) {
             "gameboy", "gb", "pokemon", "gbinfo", "calc", "eval", "sync",
             "meminfo", "memtest", "free", "df", "uptime", "date", "time",
             "whoami", "hostname", "history", "matrix", "snake", "gui", "desktop",
-            "version", "about", "panic", "reboot", "clear", "cls"
+            "desenho", "paint", "version", "about", "panic", "reboot", "clear", "cls"
         };
         int num_known = sizeof(known_cmds) / sizeof(known_cmds[0]);
 
@@ -1402,10 +1437,22 @@ void shell_execute(const char* command) {
         vga_puts("  gameboy / gb <.gb>  - Emulador Peanut-GB (ex: pokemon, gameboy)\n");
         vga_puts("  gbinfo <.gb>        - Exibe cabecalho e metadados da ROM\n");
         vga_puts("  gui / desktop       - Inicia Interface Grafica Mac OS System 7\n");
+        vga_puts("  desenho / paint     - Inicia app de desenho estilo MacPaint (GUI)\n");
         vga_puts("  snake / matrix      - Jogos e efeitos visuais no terminal\n\n");
 
         vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
-        vga_puts("[4] SISTEMA, AUDIO, DIAGNOSTICO E ATALHOS:\n");
+        vga_puts("[4] PROCESSOS, SCHEDULER PREEMPTIVO E PAGINACAO:\n");
+        vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+        vga_puts("  ps / tasks / top    - Exibe tabela de processos ativos no Preemptive Scheduler\n");
+        vga_puts("  kill <pid>          - Encerra um processo pelo seu identificador unico (PID)\n");
+        vga_puts("  spawn / kthread [n] - Cria uma thread de Kernel em background (Ring 0)\n");
+        vga_puts("  ring3 / userdemo    - Cria processo isolado em Ring 3 usando Syscalls (int 0x80)\n");
+        vga_puts("  faultdemo / segfault- Demonstra isolamento de falha (#PF) em Ring 3 sem panic\n");
+        vga_puts("  gpfdemo             - Demonstra protecao contra instrucao privilegiada em Ring 3\n");
+        vga_puts("  pages / vmm / cr3   - Exibe status da paginacao x86 de 2 niveis e CR3\n\n");
+
+        vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+        vga_puts("[5] SISTEMA, AUDIO, DIAGNOSTICO E ATALHOS:\n");
         vga_set_color(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
         vga_puts("  beep [freq] [dur]   - Emite tom sonoro no PC Speaker (ex: beep 440 200)\n");
         vga_puts("  sfx <nome>          - Toca efeito sonoro (startup, alert, click, trash, success)\n");
@@ -1589,6 +1636,13 @@ void shell_execute(const char* command) {
         gui_launch_desktop();
         vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
         vga_puts("Retornado ao terminal de comandos migOS.\n\n");
+    } else if (strcmp(cmd, "desenho") == 0 || strcmp(cmd, "paint") == 0) {
+        vga_set_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK);
+        vga_puts("Iniciando Desenho (Mac OS System 7 Paint 640x480)...\n");
+        sleep(200);
+        gui_launch_desenho();
+        vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+        vga_puts("Retornado ao terminal de comandos migOS.\n\n");
     } else if (strcmp(cmd, "version") == 0) {
         vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
         vga_puts("migOS Kernel v0.5 (32-bit Protected Mode com File Manager & Game Boy Engine)\n");
@@ -1596,6 +1650,91 @@ void shell_execute(const char* command) {
         vga_set_color(VGA_COLOR_LIGHT_MAGENTA, VGA_COLOR_BLACK);
         vga_puts("migOS - Sistema Operacional Desenvolvido por Miguel\n");
         vga_puts("Arquitetura: x86 (IA-32) Bare-Metal com MIGFS Persistente\n");
+    } else if (strcmp(cmd, "ps") == 0 || strcmp(cmd, "tasks") == 0 || strcmp(cmd, "top") == 0) {
+        task_list_print();
+    } else if (strncmp(cmd, "kill", 4) == 0 && (cmd[4] == ' ' || cmd[4] == '\0')) {
+        const char* pstr = cmd + 4;
+        while (*pstr == ' ') pstr++;
+        if (*pstr == '\0') {
+            vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+            vga_puts("Uso: kill <pid>\n");
+        } else {
+            uint32_t pid = (uint32_t)atoi(pstr);
+            if (pid == 0) {
+                vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+                vga_puts("[ERRO] Nao e permitido encerrar o processo 0 (Kernel Shell Principal)!\n");
+            } else {
+                int res = task_kill(pid);
+                if (res == 0) {
+                    vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+                    vga_puts("[OK] Sinal de encerramento enviado ao processo PID ");
+                    vga_puts(pstr);
+                    vga_puts(" com sucesso.\n");
+                } else {
+                    vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+                    vga_puts("[ERRO] Processo PID ");
+                    vga_puts(pstr);
+                    vga_puts(" nao encontrado ou ja inativo.\n");
+                }
+            }
+        }
+    } else if (strncmp(cmd, "spawn", 5) == 0 || strncmp(cmd, "kthread", 7) == 0) {
+        const char* tname = (strncmp(cmd, "spawn", 5) == 0) ? (cmd + 5) : (cmd + 7);
+        while (*tname == ' ') tname++;
+        if (*tname == '\0') tname = "worker_bg";
+        task_t* kt = task_create_kthread(tname, demo_kthread_worker, 3);
+        if (kt) {
+            char pbuf[16];
+            itoa((int)kt->pid, pbuf, 10);
+            vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+            vga_puts("[OK] Thread de Kernel '");
+            vga_puts(kt->name);
+            vga_puts("' criada com sucesso (PID: ");
+            vga_puts(pbuf);
+            vga_puts(", Ring 0, Quantum: 6 ticks).\n");
+        } else {
+            vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+            vga_puts("[ERRO] Falha ao criar Thread de Kernel (Tabela cheia).\n");
+        }
+    } else if (strcmp(cmd, "ring3") == 0 || strcmp(cmd, "userdemo") == 0) {
+        task_t* ut = task_create_user_process("user_demo_app", demo_user_process, 3);
+        if (ut) {
+            char pbuf[16];
+            itoa((int)ut->pid, pbuf, 10);
+            vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+            vga_puts("[OK] Processo de Usuario Isolado criado com sucesso!\n");
+            vga_puts("     PID: "); vga_puts(pbuf);
+            vga_puts(" | Privilegio: Ring 3 (CPL=3) | Diretorio CR3 dedicado: 0x");
+            itoa((int)ut->page_directory, pbuf, 16); vga_puts(pbuf);
+            vga_puts("\n     O processo executara de forma preemptiva usando Syscalls (int 0x80).\n");
+        } else {
+            vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+            vga_puts("[ERRO] Falha ao criar processo de usuario Ring 3.\n");
+        }
+    } else if (strcmp(cmd, "faultdemo") == 0 || strcmp(cmd, "segfault") == 0) {
+        task_t* ft = task_create_user_process("bad_process_pf", demo_fault_isolation_process, 3);
+        if (ft) {
+            char pbuf[16];
+            itoa((int)ft->pid, pbuf, 10);
+            vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+            vga_puts("[DEMO] Processo de Usuario infrator disparado (PID: ");
+            vga_puts(pbuf);
+            vga_puts(").\n       Ele tentara violar a memoria protegida do Kernel (0x00100000).\n");
+            vga_puts("       A MMU disparara #PF (ISR 14), o SO encerrara apenas ele com SegFault e o Shell continuara rodando!\n");
+        }
+    } else if (strcmp(cmd, "gpfdemo") == 0) {
+        task_t* gt = task_create_user_process("priv_violator_gp", demo_gpf_isolation_process, 3);
+        if (gt) {
+            char pbuf[16];
+            itoa((int)gt->pid, pbuf, 10);
+            vga_set_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+            vga_puts("[DEMO] Processo de Usuario infrator disparado (PID: ");
+            vga_puts(pbuf);
+            vga_puts(").\n       Ele tentara executar 'cli' em Ring 3.\n");
+            vga_puts("       O hardware disparara #GP (ISR 13), o SO finalizara a tarefa e o Kernel permanecera intacto!\n");
+        }
+    } else if (strcmp(cmd, "pages") == 0 || strcmp(cmd, "vmm") == 0 || strcmp(cmd, "cr3") == 0) {
+        vmm_print_info();
     } else if (strcmp(cmd, "panic") == 0) {
         vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
         vga_puts("Disparando excecao de CPU (ISR 0)...\n");

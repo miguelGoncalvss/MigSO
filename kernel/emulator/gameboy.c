@@ -13,10 +13,12 @@
 #include <libc/string.h>
 
 // Contexto estatico do Peanut-GB e buffers
-static struct gb_s gb_inst;
+#define GB_SRAM_SIZE 32768
+static struct gb_s* gb_inst_ptr = NULL;
+#define gb_inst (*gb_inst_ptr)
 static uint8_t* gb_rom_ptr = NULL;
 static size_t   gb_rom_sz = 0;
-static uint8_t  gb_sram_buf[32768];
+static uint8_t* gb_sram_buf = NULL;
 static char     gb_current_rom[MIGFS_MAX_FILENAME] = {0};
 static char     gb_save_name[MIGFS_MAX_FILENAME] = {0};
 static int      gb_sram_is_dirty = 0;
@@ -68,7 +70,7 @@ static uint8_t gb_rom_read_cb(struct gb_s *gb, const uint_fast32_t addr) {
 
 static uint8_t gb_cart_ram_read_cb(struct gb_s *gb, const uint_fast32_t addr) {
     (void)gb;
-    if (addr < sizeof(gb_sram_buf)) {
+    if (addr < GB_SRAM_SIZE && gb_sram_buf != NULL) {
         return gb_sram_buf[addr];
     }
     return 0xFF;
@@ -76,7 +78,7 @@ static uint8_t gb_cart_ram_read_cb(struct gb_s *gb, const uint_fast32_t addr) {
 
 static void gb_cart_ram_write_cb(struct gb_s *gb, const uint_fast32_t addr, const uint8_t val) {
     (void)gb;
-    if (addr < sizeof(gb_sram_buf)) {
+    if (addr < GB_SRAM_SIZE && gb_sram_buf != NULL) {
         gb_sram_buf[addr] = val;
         gb_sram_is_dirty = 1;
     }
@@ -120,8 +122,8 @@ static void gb_lcd_draw_line_cb(struct gb_s *gb, const uint8_t *pixels, const ui
 }
 
 void gameboy_sync_save(void) {
-    if (gb_sram_is_dirty && gb_save_name[0] != '\0') {
-        migfs_write(gb_save_name, (const char*)gb_sram_buf, sizeof(gb_sram_buf));
+    if (gb_sram_is_dirty && gb_save_name[0] != '\0' && gb_sram_buf) {
+        migfs_write(gb_save_name, (const char*)gb_sram_buf, GB_SRAM_SIZE);
         gb_sram_is_dirty = 0;
     }
 }
@@ -217,10 +219,26 @@ int gameboy_launch(const char* rom_filename) {
         gb_rom_ptr = NULL;
     }
 
+    if (!gb_inst_ptr) {
+        gb_inst_ptr = (struct gb_s*)kmalloc(sizeof(struct gb_s));
+    }
+    if (!gb_sram_buf) {
+        gb_sram_buf = (uint8_t*)kmalloc(GB_SRAM_SIZE);
+    }
+    if (!gb_inst_ptr || !gb_sram_buf) {
+        vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+        vga_puts("Erro: memoria insuficiente para o emulador Game Boy.\n");
+        if (gb_inst_ptr) { kfree(gb_inst_ptr); gb_inst_ptr = NULL; }
+        if (gb_sram_buf) { kfree(gb_sram_buf); gb_sram_buf = NULL; }
+        return -2;
+    }
+
     gb_rom_ptr = (uint8_t*)kmalloc(f->size);
     if (!gb_rom_ptr) {
         vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
         vga_puts("Erro: memoria insuficiente no Heap para alocar a ROM.\n");
+        if (gb_inst_ptr) { kfree(gb_inst_ptr); gb_inst_ptr = NULL; }
+        if (gb_sram_buf) { kfree(gb_sram_buf); gb_sram_buf = NULL; }
         return -2;
     }
 
@@ -235,11 +253,11 @@ int gameboy_launch(const char* rom_filename) {
     else strcat(gb_save_name, ".sav");
 
     // Limpa e restaura SRAM do save anterior se existir no disco ATA
-    memset(gb_sram_buf, 0, sizeof(gb_sram_buf));
+    memset(gb_sram_buf, 0, GB_SRAM_SIZE);
     gb_sram_is_dirty = 0;
     migfs_file_t* sav = migfs_open(gb_save_name);
     if (sav && sav->data && sav->size > 0) {
-        size_t to_copy = (sav->size < sizeof(gb_sram_buf)) ? sav->size : sizeof(gb_sram_buf);
+        size_t to_copy = (sav->size < GB_SRAM_SIZE) ? sav->size : GB_SRAM_SIZE;
         memcpy(gb_sram_buf, sav->data, to_copy);
     }
 
@@ -248,6 +266,8 @@ int gameboy_launch(const char* rom_filename) {
     if (err != GB_INIT_NO_ERROR) {
         kfree(gb_rom_ptr);
         gb_rom_ptr = NULL;
+        if (gb_inst_ptr) { kfree(gb_inst_ptr); gb_inst_ptr = NULL; }
+        if (gb_sram_buf) { kfree(gb_sram_buf); gb_sram_buf = NULL; }
         vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
         vga_puts("Erro ao inicializar Peanut-GB (codigo: ");
         char ebuf[16];
@@ -361,6 +381,14 @@ int gameboy_launch(const char* rom_filename) {
     gb_fb = NULL;
     kfree(gb_rom_ptr);
     gb_rom_ptr = NULL;
+    if (gb_inst_ptr) {
+        kfree(gb_inst_ptr);
+        gb_inst_ptr = NULL;
+    }
+    if (gb_sram_buf) {
+        kfree(gb_sram_buf);
+        gb_sram_buf = NULL;
+    }
 
     vga_clear();
     vga_set_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
@@ -368,3 +396,233 @@ int gameboy_launch(const char* rom_filename) {
 
     return 0;
 }
+
+// ============================================================
+// Suporte a Execucao em Janela no Desktop / Ambiente Grafico
+// ============================================================
+#define GB_GUI_SCREEN_W 320
+#define GB_GUI_SCREEN_H 288
+
+static uint32_t* gb_gui_screen = NULL;
+static char gb_gui_rom_title[32] = {0};
+static int gb_gui_is_initialized = 0;
+
+static void gb_lcd_draw_line_gui_cb(struct gb_s *gb, const uint8_t *pixels, const uint_fast8_t line) {
+    (void)gb;
+    if (!gb_gui_screen || line >= LCD_HEIGHT) return;
+
+    const uint32_t* pal = palette_dmg;
+    if (active_palette_idx == 1) pal = palette_pocket;
+    else if (active_palette_idx == 2) pal = palette_fire_red;
+    else if (active_palette_idx == 3) pal = palette_cyan;
+
+    int y1 = line * 2;
+    int y2 = y1 + 1;
+
+    for (int x = 0; x < LCD_WIDTH; x++) {
+        uint8_t color_idx = pixels[x] & 0x03;
+        uint32_t px_color = pal[color_idx];
+
+        int px1 = x * 2;
+        int px2 = px1 + 1;
+
+        gb_gui_screen[y1 * GB_GUI_SCREEN_W + px1] = px_color;
+        gb_gui_screen[y1 * GB_GUI_SCREEN_W + px2] = px_color;
+        gb_gui_screen[y2 * GB_GUI_SCREEN_W + px1] = px_color;
+        gb_gui_screen[y2 * GB_GUI_SCREEN_W + px2] = px_color;
+    }
+}
+
+int gameboy_gui_load_rom(const char* rom_filename) {
+    if (!rom_filename || rom_filename[0] == '\0') return -1;
+
+    // Se a mesma ROM ja esta carregada e o emulador rodando, nao reinicia o jogo
+    if (gb_gui_is_initialized && strcmp(gb_current_rom, rom_filename) == 0) {
+        return 0;
+    }
+
+    // Se havia outra ROM rodando, persiste o save anterior
+    if (gb_gui_is_initialized) {
+        gameboy_sync_save();
+    }
+
+    migfs_file_t* f = migfs_open(rom_filename);
+    if (!f || !f->data || f->size < 0x150) {
+        return -1;
+    }
+
+    if (!gb_inst_ptr) {
+        gb_inst_ptr = (struct gb_s*)kmalloc(sizeof(struct gb_s));
+    }
+    if (!gb_sram_buf) {
+        gb_sram_buf = (uint8_t*)kmalloc(GB_SRAM_SIZE);
+    }
+    if (!gb_gui_screen) {
+        gb_gui_screen = (uint32_t*)kmalloc(GB_GUI_SCREEN_W * GB_GUI_SCREEN_H * sizeof(uint32_t));
+    }
+
+    if (!gb_inst_ptr || !gb_sram_buf || !gb_gui_screen) {
+        return -2;
+    }
+
+    // Usa os dados da ROM diretamente do arquivo ja mapeado na RAM pelo MIGFS (economiza 1MB no Heap)
+    gb_rom_ptr = (uint8_t*)f->data;
+    gb_rom_sz = f->size;
+    strncpy(gb_current_rom, rom_filename, MIGFS_MAX_FILENAME - 1);
+    gb_current_rom[MIGFS_MAX_FILENAME - 1] = '\0';
+
+    // Prepara nome do save persistente (ex: PokemonRed.gb -> PokemonRed.sav)
+    strncpy(gb_save_name, rom_filename, MIGFS_MAX_FILENAME - 5);
+    char* dot = strrchr(gb_save_name, '.');
+    if (dot) strcpy(dot, ".sav");
+    else strcat(gb_save_name, ".sav");
+
+    // Limpa e restaura SRAM do save anterior se existir no disco ATA
+    memset(gb_sram_buf, 0, GB_SRAM_SIZE);
+    gb_sram_is_dirty = 0;
+    migfs_file_t* sav = migfs_open(gb_save_name);
+    if (sav && sav->data && sav->size > 0) {
+        size_t to_copy = (sav->size < GB_SRAM_SIZE) ? sav->size : GB_SRAM_SIZE;
+        memcpy(gb_sram_buf, sav->data, to_copy);
+    }
+
+    // Inicializa Peanut-GB
+    enum gb_init_error_e err = gb_init(&gb_inst, gb_rom_read_cb, gb_cart_ram_read_cb, gb_cart_ram_write_cb, gb_error_cb, NULL);
+    if (err != GB_INIT_NO_ERROR) {
+        kfree(gb_rom_ptr);
+        gb_rom_ptr = NULL;
+        gb_gui_is_initialized = 0;
+        return -3;
+    }
+
+    gb_init_lcd(&gb_inst, gb_lcd_draw_line_gui_cb);
+
+    // Obtem nome interno do cartucho
+    gb_gui_rom_title[0] = '\0';
+    gb_get_rom_name(&gb_inst, gb_gui_rom_title);
+    if (gb_gui_rom_title[0] == '\0') {
+        strncpy(gb_gui_rom_title, rom_filename, sizeof(gb_gui_rom_title) - 1);
+    }
+
+    // Inicializa tela da GUI com cor de fundo da paleta
+    for (int i = 0; i < GB_GUI_SCREEN_W * GB_GUI_SCREEN_H; i++) {
+        gb_gui_screen[i] = palette_dmg[0];
+    }
+
+    // Inicializa joypad (1 = liberado)
+    gb_inst.direct.joypad = 0xFF;
+
+    gb_gui_is_initialized = 1;
+    return 0;
+}
+
+void gameboy_gui_step_frame(void) {
+    if (!gb_gui_is_initialized || !gb_inst_ptr) return;
+    gb_run_frame(&gb_inst);
+}
+
+void gameboy_gui_handle_key(int pressed, unsigned char key) {
+    if (!gb_gui_is_initialized || !gb_inst_ptr) return;
+
+    if (pressed) {
+        if (key == KEY_UP_ARROW || key == 'w' || key == 'W') {
+            gb_inst.direct.joypad_bits.up = 0;
+        } else if (key == KEY_DOWN_ARROW || key == 's' || key == 'S') {
+            gb_inst.direct.joypad_bits.down = 0;
+        } else if (key == KEY_LEFT_ARROW || key == 'a' || key == 'A') {
+            gb_inst.direct.joypad_bits.left = 0;
+        } else if (key == KEY_RIGHT_ARROW || key == 'd' || key == 'D') {
+            gb_inst.direct.joypad_bits.right = 0;
+        } else if (key == 'z' || key == 'Z' || key == 'j' || key == 'J') {
+            gb_inst.direct.joypad_bits.a = 0;
+        } else if (key == 'x' || key == 'X' || key == 'k' || key == 'K') {
+            gb_inst.direct.joypad_bits.b = 0;
+        } else if (key == KEY_ENTER) {
+            gb_inst.direct.joypad_bits.start = 0;
+        } else if (key == ' ' || key == KEY_BACKSPACE || key == 'c' || key == 'C') {
+            gb_inst.direct.joypad_bits.select = 0;
+        } else if (key == '1') {
+            active_palette_idx = 0;
+        } else if (key == '2') {
+            active_palette_idx = 1;
+        } else if (key == '3') {
+            active_palette_idx = 2;
+        } else if (key == '4') {
+            active_palette_idx = 3;
+        } else if (key == 'p' || key == 'P') {
+            gameboy_sync_save();
+        }
+    } else {
+        if (key == KEY_UP_ARROW || key == 'w' || key == 'W') {
+            gb_inst.direct.joypad_bits.up = 1;
+        } else if (key == KEY_DOWN_ARROW || key == 's' || key == 'S') {
+            gb_inst.direct.joypad_bits.down = 1;
+        } else if (key == KEY_LEFT_ARROW || key == 'a' || key == 'A') {
+            gb_inst.direct.joypad_bits.left = 1;
+        } else if (key == KEY_RIGHT_ARROW || key == 'd' || key == 'D') {
+            gb_inst.direct.joypad_bits.right = 1;
+        } else if (key == 'z' || key == 'Z' || key == 'j' || key == 'J') {
+            gb_inst.direct.joypad_bits.a = 1;
+        } else if (key == 'x' || key == 'X' || key == 'k' || key == 'K') {
+            gb_inst.direct.joypad_bits.b = 1;
+        } else if (key == KEY_ENTER) {
+            gb_inst.direct.joypad_bits.start = 1;
+        } else if (key == ' ' || key == KEY_BACKSPACE || key == 'c' || key == 'C') {
+            gb_inst.direct.joypad_bits.select = 1;
+        }
+    }
+}
+
+const uint32_t* gameboy_gui_get_screen(void) {
+    return gb_gui_screen;
+}
+
+int gameboy_gui_is_loaded(void) {
+    return gb_gui_is_initialized;
+}
+
+const char* gameboy_gui_get_rom_title(void) {
+    return gb_gui_rom_title[0] ? gb_gui_rom_title : gb_current_rom;
+}
+
+void gameboy_gui_cycle_palette(void) {
+    active_palette_idx = (active_palette_idx + 1) % 4;
+}
+
+const char* gameboy_gui_get_palette_name(void) {
+    switch (active_palette_idx) {
+        case 0: return "DMG";
+        case 1: return "Pocket";
+        case 2: return "Fire Red";
+        case 3: return "Cyan";
+        default: return "DMG";
+    }
+}
+
+void gameboy_gui_reset(void) {
+    if (!gb_gui_is_initialized || !gb_rom_ptr) return;
+    gb_init(&gb_inst, gb_rom_read_cb, gb_cart_ram_read_cb, gb_cart_ram_write_cb, gb_error_cb, NULL);
+    gb_init_lcd(&gb_inst, gb_lcd_draw_line_gui_cb);
+    gb_inst.direct.joypad = 0xFF;
+}
+
+void gameboy_gui_cleanup(void) {
+    gameboy_sync_save();
+    gb_rom_ptr = NULL;
+    if (gb_gui_screen) {
+        kfree(gb_gui_screen);
+        gb_gui_screen = NULL;
+    }
+    if (gb_inst_ptr) {
+        kfree(gb_inst_ptr);
+        gb_inst_ptr = NULL;
+    }
+    if (gb_sram_buf) {
+        kfree(gb_sram_buf);
+        gb_sram_buf = NULL;
+    }
+    gb_gui_is_initialized = 0;
+    gb_current_rom[0] = '\0';
+    gb_gui_rom_title[0] = '\0';
+}
+

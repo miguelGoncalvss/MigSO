@@ -81,7 +81,11 @@ if ($LASTEXITCODE -ne 0) { throw "Falha na montagem de boot.asm" }
 & $NasmExec -f win32 "kernel\arch\i386\kernel_entry.asm" -o "$BuildDir\kernel_entry.o"
 if ($LASTEXITCODE -ne 0) { throw "Falha na montagem de kernel_entry.asm" }
 
-# ISR Assembly Stubs (Excecoes de CPU)
+# GDT & TSS Flush Assembly Helpers
+& $NasmExec -f win32 "kernel\arch\i386\gdt_asm.asm" -o "$BuildDir\gdt_asm.o"
+if ($LASTEXITCODE -ne 0) { throw "Falha na montagem de gdt_asm.asm" }
+
+# ISR Assembly Stubs (Excecoes de CPU, Timer Preemptivo e Syscalls)
 & $NasmExec -f win32 "kernel\arch\i386\isr_asm.asm" -o "$BuildDir\isr_asm.o"
 if ($LASTEXITCODE -ne 0) { throw "Falha na montagem de isr_asm.asm" }
 
@@ -134,12 +138,16 @@ $GccFlags = @(
 
 $Core_Sources = @(
     @{ Src = "kernel\kernel.c";                 Obj = "$BuildDir\kernel.o" },
+    @{ Src = "kernel\arch\i386\gdt.c";          Obj = "$BuildDir\gdt.o" },
     @{ Src = "kernel\arch\i386\idt.c";          Obj = "$BuildDir\idt.o" },
     @{ Src = "kernel\arch\i386\isr.c";          Obj = "$BuildDir\isr.o" },
     @{ Src = "kernel\arch\i386\pic.c";          Obj = "$BuildDir\pic.o" },
     @{ Src = "kernel\arch\i386\timer.c";        Obj = "$BuildDir\timer.o" },
     @{ Src = "kernel\memory\pmm.c";             Obj = "$BuildDir\pmm.o" },
     @{ Src = "kernel\memory\kheap.c";           Obj = "$BuildDir\kheap.o" },
+    @{ Src = "kernel\memory\vmm.c";             Obj = "$BuildDir\vmm.o" },
+    @{ Src = "kernel\task\task.c";              Obj = "$BuildDir\task.o" },
+    @{ Src = "kernel\syscall\syscall.c";        Obj = "$BuildDir\syscall.o" },
     @{ Src = "kernel\fs\migfs.c";               Obj = "$BuildDir\migfs.o" },
     @{ Src = "kernel\editor\editor.c";          Obj = "$BuildDir\editor.o" },
     @{ Src = "kernel\interpreter\txt_interp.c"; Obj = "$BuildDir\txt_interp.o" },
@@ -174,14 +182,19 @@ Write-Host "[4/7] Linkando modulos do Kernel e GUI..." -ForegroundColor Yellow
 # ATENCAO: kernel_entry.o DEVE ser o primeiro objeto para posicionar _start em 0x10000
 $LinkObjects = @(
     "$BuildDir\kernel_entry.o",
+    "$BuildDir\gdt_asm.o",
     "$BuildDir\isr_asm.o",
     "$BuildDir\kernel.o",
+    "$BuildDir\gdt.o",
     "$BuildDir\idt.o",
     "$BuildDir\isr.o",
     "$BuildDir\pic.o",
     "$BuildDir\timer.o",
     "$BuildDir\pmm.o",
     "$BuildDir\kheap.o",
+    "$BuildDir\vmm.o",
+    "$BuildDir\task.o",
+    "$BuildDir\syscall.o",
     "$BuildDir\migfs.o",
     "$BuildDir\editor.o",
     "$BuildDir\txt_interp.o",

@@ -47,16 +47,39 @@ static int pmm_find_first_free_block(void) {
     return -1; // Sem blocos livres
 }
 
-// Localiza N blocos contiguos livres
+// Localiza N blocos contiguos livres de forma otimizada
 static int pmm_find_first_free_blocks(size_t count) {
     if (count == 0) return -1;
     if (count == 1) return pmm_find_first_free_block();
 
+    const uint32_t* dwords = (const uint32_t*)pmm_bitmap;
+    size_t dword_count = pmm_total_blocks / 32;
+
     size_t free_streak = 0;
     size_t start_bit = 0;
+    size_t bit = 0;
 
-    for (size_t bit = 0; bit < pmm_total_blocks; bit++) {
-        if (!pmm_test_bit(bit)) {
+    while (bit < pmm_total_blocks) {
+        // Se estiver alinhado a uma dword e nao houver sequencia em andamento, pula dwords 100% ocupadas
+        if ((bit % 32) == 0 && (bit / 32) < dword_count) {
+            uint32_t dw = dwords[bit / 32];
+            if (dw == 0xFFFFFFFF) {
+                free_streak = 0;
+                bit += 32;
+                continue;
+            }
+            if (dw == 0x00000000 && free_streak == 0) {
+                start_bit = bit;
+                free_streak = 32;
+                if (free_streak >= count) {
+                    return (int)start_bit;
+                }
+                bit += 32;
+                continue;
+            }
+        }
+
+        if (!pmm_test_bit((uint32_t)bit)) {
             if (free_streak == 0) {
                 start_bit = bit;
             }
@@ -67,6 +90,7 @@ static int pmm_find_first_free_blocks(size_t count) {
         } else {
             free_streak = 0;
         }
+        bit++;
     }
 
     return -1;

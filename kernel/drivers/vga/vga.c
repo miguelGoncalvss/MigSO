@@ -3,7 +3,7 @@
 #include <gui/font8x8.h>
 #include <arch/i386/io.h>
 
-#define TERM_BUFFER_LINES 500
+#define TERM_BUFFER_LINES 120
 
 static int term_cursor_row = 0; // Linha atual de escrita no buffer (0 .. TERM_BUFFER_LINES - 1)
 static int term_cursor_col = 0; // Coluna atual de escrita no buffer (0 .. VGA_WIDTH - 2)
@@ -53,32 +53,38 @@ static void draw_text_cell(int col, int row, unsigned char ch, unsigned char col
         uint8_t bits = glyph[r];
         int py1 = start_y + (r * 2);
         int py2 = py1 + 1;
+        uint32_t* row1 = &fb[py1 * SCREEN_WIDTH + start_x];
+        uint32_t* row2 = &fb[py2 * SCREEN_WIDTH + start_x];
         for (int c = 0; c < 8; c++) {
             uint32_t color = (bits & (1 << (7 - c))) ? fg : bg;
-            int px = start_x + c;
-            fb[py1 * SCREEN_WIDTH + px] = color;
-            fb[py2 * SCREEN_WIDTH + px] = color;
+            row1[c] = color;
+            row2[c] = color;
+        }
+    }
+}
+
+static void draw_cursor_at(int col, int row) {
+    if (row < 0 || row >= VGA_HEIGHT) return;
+    if (col < 0 || col >= VGA_WIDTH - 1) return;
+
+    uint32_t* fb = bga_get_framebuffer();
+    if (!fb) return;
+
+    uint32_t fg = vga_colors_32[current_color & 0x0F];
+    int start_x = col * 8;
+    int start_y = row * 16 + 14;
+
+    for (int y = start_y; y < start_y + 2 && y < SCREEN_HEIGHT; y++) {
+        uint32_t* row_ptr = &fb[y * SCREEN_WIDTH + start_x];
+        for (int x = 0; x < 8 && (start_x + x) < SCREEN_WIDTH; x++) {
+            row_ptr[x] = fg;
         }
     }
 }
 
 static void draw_cursor(void) {
     int screen_r = term_cursor_row - term_view_row;
-    if (screen_r < 0 || screen_r >= VGA_HEIGHT) return;
-    if (term_cursor_col < 0 || term_cursor_col >= VGA_WIDTH - 1) return;
-
-    uint32_t* fb = bga_get_framebuffer();
-    if (!fb) return;
-
-    uint32_t fg = vga_colors_32[current_color & 0x0F];
-    int start_x = term_cursor_col * 8;
-    int start_y = screen_r * 16 + 14;
-
-    for (int y = start_y; y < start_y + 2 && y < SCREEN_HEIGHT; y++) {
-        for (int x = start_x; x < start_x + 8 && x < SCREEN_WIDTH; x++) {
-            fb[y * SCREEN_WIDTH + x] = fg;
-        }
-    }
+    draw_cursor_at(term_cursor_col, screen_r);
 }
 
 static void vga_draw_scrollbar(int max_view) {
@@ -127,8 +133,15 @@ static void vga_draw_scrollbar(int max_view) {
 }
 
 static void vga_refresh_display(void) {
+    if (term_cursor_row < 0) term_cursor_row = 0;
+    if (term_cursor_row >= TERM_BUFFER_LINES) term_cursor_row = TERM_BUFFER_LINES - 1;
+    if (term_cursor_col < 0) term_cursor_col = 0;
+    if (term_cursor_col >= VGA_WIDTH - 1) term_cursor_col = VGA_WIDTH - 2;
+
     int max_view = term_cursor_row - (VGA_HEIGHT - 1);
     if (max_view < 0) max_view = 0;
+    if (term_view_row < 0) term_view_row = 0;
+    if (term_view_row > max_view) term_view_row = max_view;
 
     // 1. Redesenha celulas visiveis do buffer
     for (int y = 0; y < VGA_HEIGHT; y++) {
@@ -238,6 +251,16 @@ void vga_set_cell(int x, int y, char c, unsigned char fg, unsigned char bg) {
 void vga_set_cursor(int row, int col) {
     if (col >= VGA_WIDTH - 1) col = VGA_WIDTH - 2;
     if (col < 0) col = 0;
+
+    int old_screen_r = term_cursor_row - term_view_row;
+    int old_col = term_cursor_col;
+
+    // Redesenha a celula antiga para limpar o cursor
+    if (old_screen_r >= 0 && old_screen_r < VGA_HEIGHT && old_col >= 0 && old_col < VGA_WIDTH - 1) {
+        unsigned short entry = term_buffer[term_cursor_row][old_col];
+        draw_text_cell(old_col, old_screen_r, (unsigned char)(entry & 0xFF), (unsigned char)(entry >> 8));
+    }
+
     term_cursor_col = col;
 
     if (row >= VGA_HEIGHT) row = VGA_HEIGHT - 1;
@@ -247,7 +270,7 @@ void vga_set_cursor(int row, int col) {
         term_cursor_row = TERM_BUFFER_LINES - 1;
     }
 
-    vga_refresh_display();
+    draw_cursor();
 }
 
 void vga_get_cursor(int* row, int* col) {
@@ -371,34 +394,72 @@ void vga_putc(char c) {
     // Garante que o scroll volte ao vivo ao imprimir
     int max_view = term_cursor_row - (VGA_HEIGHT - 1);
     if (max_view < 0) max_view = 0;
+    int needs_full_refresh = 0;
     if (term_view_row != max_view) {
         term_view_row = max_view;
+        needs_full_refresh = 1;
     }
 
+    int screen_r = term_cursor_row - term_view_row;
+
     if (uc == '\n') {
+        if (screen_r >= 0 && screen_r < VGA_HEIGHT && term_cursor_col < VGA_WIDTH - 1) {
+            unsigned short entry = term_buffer[term_cursor_row][term_cursor_col];
+            draw_text_cell(term_cursor_col, screen_r, (unsigned char)(entry & 0xFF), (unsigned char)(entry >> 8));
+        }
         term_cursor_col = 0;
         vga_scroll();
         return;
     } else if (uc == '\r') {
+        if (screen_r >= 0 && screen_r < VGA_HEIGHT && term_cursor_col < VGA_WIDTH - 1) {
+            unsigned short entry = term_buffer[term_cursor_row][term_cursor_col];
+            draw_text_cell(term_cursor_col, screen_r, (unsigned char)(entry & 0xFF), (unsigned char)(entry >> 8));
+        }
         term_cursor_col = 0;
-        vga_refresh_display();
+        if (screen_r >= 0 && screen_r < VGA_HEIGHT) {
+            draw_cursor();
+        }
         return;
     } else if (uc == '\b') {
         if (term_cursor_col > 0) {
+            if (screen_r >= 0 && screen_r < VGA_HEIGHT && term_cursor_col < VGA_WIDTH - 1) {
+                unsigned short old_entry = term_buffer[term_cursor_row][term_cursor_col];
+                draw_text_cell(term_cursor_col, screen_r, (unsigned char)(old_entry & 0xFF), (unsigned char)(old_entry >> 8));
+            }
             term_cursor_col--;
             term_buffer[term_cursor_row][term_cursor_col] = vga_entry(' ', current_color);
+            if (screen_r >= 0 && screen_r < VGA_HEIGHT) {
+                draw_text_cell(term_cursor_col, screen_r, ' ', current_color);
+                VGA_MEMORY[screen_r * VGA_WIDTH + term_cursor_col] = vga_entry(' ', current_color);
+                draw_cursor();
+            }
         }
+        return;
     } else {
-        term_buffer[term_cursor_row][term_cursor_col] = vga_entry(uc, current_color);
+        if (needs_full_refresh) {
+            vga_refresh_display();
+            screen_r = term_cursor_row - term_view_row;
+        }
+
+        int old_col = term_cursor_col;
+        term_buffer[term_cursor_row][old_col] = vga_entry(uc, current_color);
+
+        if (screen_r >= 0 && screen_r < VGA_HEIGHT && old_col < VGA_WIDTH - 1) {
+            draw_text_cell(old_col, screen_r, uc, current_color);
+            VGA_MEMORY[screen_r * VGA_WIDTH + old_col] = vga_entry(uc, current_color);
+        }
+
         term_cursor_col++;
         if (term_cursor_col >= VGA_WIDTH - 1) {
             term_cursor_col = 0;
             vga_scroll();
             return;
         }
-    }
 
-    vga_refresh_display();
+        if (screen_r >= 0 && screen_r < VGA_HEIGHT) {
+            draw_cursor();
+        }
+    }
 }
 
 void vga_puts(const char* str) {

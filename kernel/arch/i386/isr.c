@@ -108,7 +108,65 @@ void isr_init(void) {
     idt_set_gate(31, (unsigned int)isr31);
 }
 
-void isr_handler_c(registers_t* regs) {
+#include <kernel/vmm.h>
+#include <kernel/task.h>
+
+unsigned int isr_handler_c(registers_t* regs) {
+    // 1. Trata Page Fault (#PF - Vetor 14)
+    if (regs->int_no == 14) {
+        vmm_page_fault_handler(regs);
+        if (task_is_multitasking_active()) {
+            return scheduler_tick(regs);
+        }
+        return (unsigned int)regs;
+    }
+
+    // 2. Isolamento de Falhas de Hardware em Ring 3 (ex: #GP 13, #DE 0, #UD 6)
+    // Se o processo estava em espaco de usuario (CS & 3 == 3), finaliza apenas o processo infrator
+    if ((regs->cs & 0x03) == 3) {
+        vga_set_color(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+        vga_puts("\n[HARDWARE FAULT ISOLATION - RING 3 EXCEPTION]\n");
+        vga_puts(" Excecao da CPU: ");
+        if (regs->int_no < 32) {
+            vga_puts(exception_messages[regs->int_no]);
+        } else {
+            vga_puts("Desconhecida");
+        }
+        vga_puts(" (Vetor ");
+        char buf[16];
+        itoa((int)regs->int_no, buf, 10);
+        vga_puts(buf);
+        vga_puts(")\n Processo Infrator: '");
+        task_t* cur = task_get_current();
+        if (cur) {
+            vga_puts(cur->name);
+        } else {
+            vga_puts("desconhecido");
+        }
+        vga_puts("' (PID: ");
+        if (cur) {
+            itoa((int)cur->pid, buf, 10);
+            vga_puts(buf);
+        } else {
+            vga_puts("?");
+        }
+        vga_puts(")\n Violacao de Privilegio/Instrucao detectada pelo hardware x86 (CPL = 3).\n");
+        vga_puts(" Registradores no momento da falha: EIP: ");
+        print_hex(regs->eip);
+        vga_puts("  CS: ");
+        print_hex(regs->cs);
+        vga_puts("  ErrCode: ");
+        print_hex(regs->err_code);
+        vga_puts("\n Processo encerrado com segfault (Hardware Isolation ativo - Kernel protegido).\n\n");
+
+        task_exit(-1);
+        if (task_is_multitasking_active()) {
+            return scheduler_tick(regs);
+        }
+        return (unsigned int)regs;
+    }
+
+    // 3. Se a excecao ocorreu em Ring 0 (Kernel), entra em Kernel Panic Blue Screen
     __asm__ volatile ("cli");
 
     // Desativa interrupcao do teclado para evitar interferencia visual na tela azul
@@ -178,4 +236,5 @@ void isr_handler_c(registers_t* regs) {
     sleep(300);
 
     reboot_system();
+    return (unsigned int)regs;
 }
